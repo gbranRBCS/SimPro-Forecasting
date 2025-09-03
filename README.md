@@ -1,12 +1,22 @@
-# React + Vite
+# SimPro-Forecasting
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A web-based dashboard for analyzing and interacting with simulation data.
+Built as part of an A Level Computer Science NEA project, this application focuses on clean data presentation, usability features (sortable columns, responsive design, pagination, loading states), and the integration of simple machine learning models for predictions and insights.
 
-Currently, two official plugins are available:
+⸻
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+Features
+- User Authentication: Secure login and session handling.
+- Data Display: Sortable, filterable, and paginated tables.
+- Responsive UI: Works seamlessly across desktop and mobile.
+- Feedback States: Loading indicators and error messages for improved UX.
+- Machine Learning Integration: Simple predictive models (via scikit-learn) for analyzing trends.
 
-## Expanding the ESLint configuration
+⸻
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+Tech Stack
+- Frontend: React.js + TailwindCSS
+- Backend: Node.js / Express
+- Database: PostgreSQL (or SQLite for development/testing)
+- Machine Learning: Python (scikit-learn)
+- Version Control: Git
