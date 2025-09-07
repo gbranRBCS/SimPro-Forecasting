@@ -8,7 +8,7 @@ process.env.JWT_SECRET = "testsecret";
 process.env.SIMPRO_API_URL = "http://mock-simpro";
 process.env.SIMPRO_API_TOKEN = "mocktoken";
 process.env.ML_URL = "http://mock-ml";
-process.env.SYNC_INTERVAL = "1"; // 1 minute for testing
+process.env.SYNC_INTERVAL_MINUTES = "1"; // 1 minute for testing
 
 // Mock axios
 import axios from "axios";
@@ -116,3 +116,4 @@ describe("Data Routes", () => {
         expect(res2.body.error).toMatch(/ML Prediction failed/i);
         expect(res2.status).toBe(500);
     });
+});
