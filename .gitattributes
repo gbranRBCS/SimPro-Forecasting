@@ -1,0 +1,4 @@
+# Treat any vendored/generated dirs as non-primary for language stats
+ml/.venv/** linguist-vendored
+**/__pycache__/** linguist-generated
+**/*.pyc linguist-generated

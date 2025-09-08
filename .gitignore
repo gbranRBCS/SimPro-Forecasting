@@ -7,8 +7,10 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-node_modules
-dist
+#node
+node_modules/
+dist/
+build/
 dist-ssr
 *.local
 
@@ -22,6 +24,15 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+*.log
 
 backend/.env
 .env
+
+#python
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+.ipnyb_checkpoints/
