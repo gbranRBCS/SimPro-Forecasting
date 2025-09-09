@@ -36,3 +36,8 @@ env/
 __pycache__/
 *.pyc
 .ipnyb_checkpoints/
+
+#SQLite datbases
+*.db
+*.sqlite
+*.sqlite3
