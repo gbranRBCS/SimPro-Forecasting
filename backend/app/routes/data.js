@@ -111,16 +111,44 @@ router.get("/sync", authRequired, async (req, res) => {
     return res.json({ message: "Already recently synced", jobs: cachedJobs });
   }
 
+  // Date Filters
   const { DateIssued, DateIssuedFrom, DateIssuedTo } = req.query;
   const params = {};
   if (DateIssued) params.DateIssued = DateIssued;
   if (DateIssuedFrom) params.DateIssuedFrom = DateIssuedFrom;
   if (DateIssuedTo) params.DateIssuedTo = DateIssuedTo;
 
+  // Always enrich; control concurrency via env
+  const concurrency = Number.parseInt(process.env.ENRICH_CONCURRENCY || "5", 10);
+
   try {
-    cachedJobs = await fetchSimPROJobs(params);
+    // Fetch list
+    const list = await fetchSimPROJobs(params);
+
+    // Enrich jobs
+    let jobs = list;
+    if (Array.isArray(list) && list.length) {
+      const ids = list.map(j => j.ID).filter(Boolean);
+      const results = await inChunks(ids, concurrency, (id) => fetchJobDetail(id));
+
+      const byId = new Map(list.map(j => [j.ID, j]));
+      results.forEach((r, idx) => {
+        const id = ids[idx];
+        if (r.status === "fulfilled") byId.set(id, r.value);
+      });
+      jobs = Array.from(byId.values());
+    }
+
+    // Cache
+    cachedJobs = jobs.map(normaliseJob);
     lastSyncTime = now;
-    res.json({ message: "Sync was successful", jobs: cachedJobs });
+
+    res.json({
+      message: "Sync + enrich successful",
+      count: cachedJobs.length,
+      enriched: Array.isArray(cachedJobs) ? cachedJobs.length : 0,
+      jobs: cachedJobs,
+    });
   } catch (err) {
     res.status(500).json({
       error: "Failed to fetch simPRO job data.",
@@ -129,20 +157,76 @@ router.get("/sync", authRequired, async (req, res) => {
   }
 });
 
-// Helper to filter and sort jobs based on query params
+function getRevenue(j) {
+  if (typeof j?.revenue === "number") return j.revenue;
+  const inc = j?.Total?.IncTax;
+  return typeof inc === "number" ? inc : (inc ? Number(inc) : null);
+}
+
 function filterAndSortJobs(jobs, query) {
-  let { sortField = "date", order = "asc", minRevenue, maxRevenue } = query;
-  let filteredJobs = [...jobs];
+  let { sortField = "revenue", order = "asc", minRevenue, maxRevenue, limit } = query;
+  let filtered = [...jobs];
 
-  if (minRevenue) filteredJobs = filteredJobs.filter(j => j.Total?.IncTax >= parseFloat(minRevenue));
-  if (maxRevenue) filteredJobs = filteredJobs.filter(j => j.Total?.IncTax <= parseFloat(maxRevenue));
-
-  filteredJobs.sort((a, b) => {
-    if (order === "desc") return b[sortField] > a[sortField] ? 1 : -1;
-    return a[sortField] > b[sortField] ? 1 : -1;
+  if (minRevenue) filtered = filtered.filter(j => {
+    const r = getRevenue(j);
+    return r != null && r >= parseFloat(minRevenue);
+  });
+  if (maxRevenue) filtered = filtered.filter(j => {
+    const r = getRevenue(j);
+    return r != null && r <= parseFloat(maxRevenue);
   });
 
-  return filteredJobs;
+  filtered.sort((a, b) => {
+    const A = sortField === "revenue" ? (getRevenue(a) ?? -Infinity) : a[sortField];
+    const B = sortField === "revenue" ? (getRevenue(b) ?? -Infinity) : b[sortField];
+    if (order === "desc") return A > B ? -1 : 1;
+    return A > B ? 1 : -1;
+  });
+
+  if (limit) {
+    const n = Number.parseInt(limit, 10);
+    if (!Number.isNaN(n) && n > 0) filtered = filtered.slice(0, n);
+  }
+  return filtered;
+}
+
+function stripHtml(s = " ") {
+  return String(s.replace(/<[^>]*>/g, "").trim());
+}
+
+function normaliseJob(j) {
+  const incTax = j?.Total?.IncTax ?? null;
+  return {
+    ...j,
+    descriptionText: stripHtml(j?.Description ?? " "),
+    revenue: typeof incTax === "number" ? incTax : (incTax ? Number(incTax) : null),
+    status: j?.Status ?? null,
+    dateIssued: j?.DateIssued ?? null,
+    dateDue: j?.DateDue ?? null,
+    customerName: j?.Customer?.Name ?? null,
+    siteName: j?.Site?.Name ?? null,
+    jobType: j?.JobType ?? null,
+  };
+}
+
+async function fetchJobDetail(jobId) {
+  const base = process.env.SIMPRO_API_BASE;
+  const companyId = process.env.SIMPRO_COMPANY_ID || "0";
+  const url = new URL(`/v1.0/companies/${companyId}/jobs/${jobId}`, base).toString();
+  const token = await getSimproToken();
+
+  const r = await axios.get(url, { headers: { Authorization: `Bearer ${token}` }, timeout: 20_000 });
+  return r.data;
+}
+
+async function inChunks(ids, size, fn) {
+  const out = [];
+  for (let i = 0; i < ids.length; i += size) {
+    const slice = ids.slice(i, i + size);
+    const results = await Promise.allSettled(slice.map(fn));
+    out.push(...results);
+  }
+  return out;
 }
 
 router.get("/jobs", authRequired, (req, res) => {
