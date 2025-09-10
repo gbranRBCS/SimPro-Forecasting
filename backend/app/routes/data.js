@@ -194,25 +194,87 @@ function stripHtml(s = " ") {
   return String(s.replace(/<[^>]*>/g, "").trim());
 }
 
+
+function num(x, d = 0) {
+  const n = Number(x);
+  return Number.isFinite(n) ? n : d;
+}
+
+function daysBetween(a, b) {
+  const da = a ? new Date(a) : null;
+  const db = b ? new Date(b) : null;
+  if (!da || !db || Number.isNaN(+da) || Number.isNaN(+db)) return null;
+  const ms = db - da;
+  return Math.round(ms / 86400000);
+}
+
 function normaliseJob(j) {
   const incTax = j?.Total?.IncTax ?? null;
+  const revenue = typeof incTax === "number" ? incTax : (incTax ? Number(incTax) : null);
+
+  // costs: prefer estimates, fall back to actual values, otherwise set to 0
+  const mats = j?.Totals?.MaterialsCost;
+  const resCost = j?.Totals?.ResourcesCost;
+  const labor = resCost?.Labor;
+  const overhead = resCost?.Overhead;
+  const laborHours = resCost?.LaborHours;
+
+  const materials_cost_est = num(mats?.Estimate, num(mats?.Actual, 0));
+  const labor_cost_est = num(labor?.Estimate, num(labor?.Actual, 0));
+  const overhead_est = num(overhead?.Actual, 0);
+  const labor_hours_est = num(laborHours?.Estimate, num(laborHours?.Actual, 0));
+  const cost_est_total = materials_cost_est + labor_cost_est + overhead_est;
+
+  const descriptionText = stripHtml(j?.Description ?? " ");
+  const profit_est = revenue != null ? revenue - cost_est_total : null;
+  const margin_est = (revenue && revenue > 0 && profit_est != null) ? (profit_est / revenue) : null;
+
+  const dateIssued = j?.DateIssued ?? null;
+  const dateDue = j?.DueDate ?? null;
+  const age_days = dateIssued ? daysBetween(dateIssued, new Date()) : null;
+  const due_in_days = (dateIssued && dateDue) ? daysBetween(dateIssued, dateDue) : null;
+
+  const statusName = j?.Status?.Name ?? null;
+  const stage = j?.Stage ?? null;
+  const jobType = j?.Type ?? null;
+
+  const txt = descriptionText.toLowerCase();
+  const has_emergency = /emergency|urgent|callout|call-out|call out/.test(txt) ? 1 : 0;
+
   return {
     ...j,
-    descriptionText: stripHtml(j?.Description ?? " "),
-    revenue: typeof incTax === "number" ? incTax : (incTax ? Number(incTax) : null),
+    descriptionText,
+    revenue,
     status: j?.Status ?? null,
-    dateIssued: j?.DateIssued ?? null,
-    dateDue: j?.DateDue ?? null,
-    customerName: j?.Customer?.Name ?? null,
+    dateIssued,
+    dateDue,
+    customerName: j?.Customer?.CompanyName ?? null,
     siteName: j?.Site?.Name ?? null,
-    jobType: j?.JobType ?? null,
+    jobType,
+
+    // custom numeric features
+    materials_cost_est,
+    labor_cost_est,
+    overhead_est,
+    labor_hours_est,
+    cost_est_total,
+    profit_est,
+    margin_est,
+    age_days,
+    due_in_days,
+
+    // custom categorical/text flags
+    status_name: statusName,
+    stage,
+    desc_len: descriptionText.length,
+    has_emergency,
   };
 }
 
 async function fetchJobDetail(jobId) {
   const base = process.env.SIMPRO_API_BASE;
   const companyId = process.env.SIMPRO_COMPANY_ID || "0";
-  const url = new URL(`/v1.0/companies/${companyId}/jobs/${jobId}`, base).toString();
+const url = new URL(`/api/v1.0/companies/${companyId}/jobs/${jobId}`, base).toString();
   const token = await getSimproToken();
 
   const r = await axios.get(url, { headers: { Authorization: `Bearer ${token}` }, timeout: 20_000 });
