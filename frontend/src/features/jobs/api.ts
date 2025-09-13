@@ -1,38 +1,43 @@
 import api from "../../lib/api";
 
-export async function syncJobs(params?: { from?: string; to?: string }) {
-  const q = new URLSearchParams();
-  q.set("force", "1");
-  if (params?.from) q.set("DateIssuedFrom", params.from);
-  if (params?.to)   q.set("DateIssuedTo", params.to);
-  const { data } = await api.get(`/data/sync?${q.toString()}`);
-  return data; // { message, jobs }
+export type ApiJob = Record<string, any>;
+export type Prediction = {
+  jobId: number | string | null;
+  profitable: boolean;
+  probability: number; // 0..1
+  profit_est?: number | null;
+  margin_est?: number | null;
+};
+
+export async function syncJobs(params: { from?: string; to?: string; force?: boolean }) {
+  const q: Record<string, any> = {};
+  if (params?.from) q.DateIssuedFrom = params.from;
+  if (params?.to) q.DateIssuedTo = params.to;
+  if (params?.force) q.force = "1";
+  const r = await api.get("/data/sync", { params: q });
+  return r.data;
 }
 
-export async function getJobs(params?: {
-  minRevenue?: number; maxRevenue?: number;
-  sortField?: string; order?: "asc" | "desc"; limit?: number;
-}) {
-  const q = new URLSearchParams();
-  if (params?.minRevenue != null) q.set("minRevenue", String(params.minRevenue));
-  if (params?.maxRevenue != null) q.set("maxRevenue", String(params.maxRevenue));
-  if (params?.sortField) q.set("sortField", params.sortField);
-  if (params?.order)     q.set("order", params.order);
-  if (params?.limit)     q.set("limit", String(params.limit));
-  const { data } = await api.get(`/data/jobs?${q.toString()}`);
-  return data.jobs as any[];
+
+export async function getJobs(params: {
+  minRevenue?: number;
+  maxRevenue?: number;
+  sortField?: string;
+  order?: "asc" | "desc";
+  limit?: number;
+}) : Promise<{ jobs: ApiJob[] }> {
+  const r = await api.get("/data/jobs", { params });
+  return r.data as { jobs: ApiJob[] };
 }
 
-export async function predict(params?: {
-  minRevenue?: number; maxRevenue?: number;
-  sortField?: string; order?: "asc" | "desc"; limit?: number;
-}) {
-  const q = new URLSearchParams();
-  if (params?.minRevenue != null) q.set("minRevenue", String(params.minRevenue));
-  if (params?.maxRevenue != null) q.set("maxRevenue", String(params.maxRevenue));
-  if (params?.sortField) q.set("sortField", params.sortField);
-  if (params?.order)     q.set("order", params.order);
-  if (params?.limit)     q.set("limit", String(params.limit));
-  const { data } = await api.post(`/data/predict?${q.toString()}`);
-  return data; // { predictions: [{ score }], count }
+
+export async function predict(params: {
+  minRevenue?: number;
+  maxRevenue?: number;
+  sortField?: string;
+  order?: "asc" | "desc";
+  limit?: number;
+}) : Promise<{ predictions: Prediction[]; count: number }> {
+  const r = await api.post("/data/predict", null, { params });
+  return r.data;
 }

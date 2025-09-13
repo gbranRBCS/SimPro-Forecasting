@@ -5,11 +5,6 @@ import { db } from "../db/db.js";
 
 const router = express.Router();
 
-// create users
-const users = new Map([
-  ["george_b",   { passwordHash: bcrypt.hashSync("pw123", 10), isApproved: true }],
-  ["director_1", { passwordHash: bcrypt.hashSync("pw456", 10), isApproved: false }],
-]);
 
 // POST /auth/register
 router.post("/register", async (req, res) => {
