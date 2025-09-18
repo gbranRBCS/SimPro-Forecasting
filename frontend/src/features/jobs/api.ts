@@ -19,25 +19,13 @@ export async function syncJobs(params: { from?: string; to?: string; force?: boo
 }
 
 
-export async function getJobs(params: {
-  minRevenue?: number;
-  maxRevenue?: number;
-  sortField?: string;
-  order?: "asc" | "desc";
-  limit?: number;
-}) : Promise<{ jobs: ApiJob[] }> {
-  const r = await api.get("/data/jobs", { params });
-  return r.data as { jobs: ApiJob[] };
+export async function getJobs(params: any) {
+  const res = await api.get("/data/jobs", { params });
+  return res.data;
 }
 
 
-export async function predict(params: {
-  minRevenue?: number;
-  maxRevenue?: number;
-  sortField?: string;
-  order?: "asc" | "desc";
-  limit?: number;
-}) : Promise<{ predictions: Prediction[]; count: number }> {
-  const r = await api.post("/data/predict", null, { params });
-  return r.data;
+export async function predict(params: any) {
+  const res = await api.post("/data/predict", null, { params });
+  return res.data;
 }

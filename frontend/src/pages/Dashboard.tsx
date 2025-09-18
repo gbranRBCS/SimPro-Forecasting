@@ -15,6 +15,9 @@ export default function Dashboard() {
   const [pred, setPred] = useState<{ avgProbability: number; profitableCount: number; count: number } | null>(null);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [totalPages, setTotalPages] = useState(1);
 
   async function doSync() {
     setLoading(true);
@@ -39,8 +42,11 @@ export default function Dashboard() {
         sortField: "revenue",
         order,
         limit,
+        page,
+        pageSize,
       });
       setJobs(data?.jobs ?? []);
+      setTotalPages(data?.totalPages ?? 1);
       setPred(null);
     } catch (e: any) {
       setMsg(e?.response?.data?.error || "Load failed");
@@ -235,6 +241,33 @@ export default function Dashboard() {
             )}
           </tbody>
         </table>
+      </div>
+
+      {/* Pagination controls */}
+      <div className="flex gap-2 items-center">
+        <button
+          className="px-2 py-1 border rounded"
+          onClick={() => setPage((p) => Math.max(1, p - 1))}
+          disabled={page <= 1}
+        >
+          Prev
+        </button>
+        <span>Page {page} of {totalPages}</span>
+        <button
+          className="px-2 py-1 border rounded"
+          onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+          disabled={page >= totalPages}
+        >
+          Next
+        </button>
+        <input
+          className="border p-1 w-16"
+          type="number"
+          min={1}
+          value={pageSize}
+          onChange={e => setPageSize(Number(e.target.value))}
+          aria-label="Page size"
+        />
       </div>
     </div>
   );

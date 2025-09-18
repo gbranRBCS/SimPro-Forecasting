@@ -86,23 +86,35 @@ async function fetchSimPROJobs(params = {}) {
   }
 
   const url = new URL(jobsPath, base).toString();
-
   const token = await getSimproToken();
 
-  try {
-    const r = await axios.get(url, {
-      headers: { Authorization: `Bearer ${token}` },
-      params, // e.g. { DateIssued: "2018-05-29" }
-      timeout: 20_000,
-    });
-    return r.data;
-  } catch (err) {
-    const d = axiosDiag(err);
-    console.error("fetchSimPROJobs() failed:", d);
-    const e = new Error("simPRO jobs fetch failed");
-    e.detail = d;
-    throw e;
+  let allJobs = [];
+  let page = 1;
+  const pageSize = 250; // simPRO max page size
+
+  while (true) {
+    const pageParams = { ...params, page, pageSize };
+    try {
+      const r = await axios.get(url, {
+        headers: { Authorization: `Bearer ${token}` },
+        params: pageParams,
+        timeout: 20_000,
+      });
+      const jobs = Array.isArray(r.data) ? r.data : r.data?.jobs || [];
+      allJobs = allJobs.concat(jobs);
+
+      const resultCount = Number(r.headers["result-count"] || jobs.length);
+      if (resultCount < pageSize) break;
+      page += 1;
+    } catch (err) {
+      const d = axiosDiag(err);
+      console.error("fetchSimPROJobs() failed:", d);
+      const e = new Error("simPRO jobs fetch failed");
+      e.detail = d;
+      throw e;
+    }
   }
+  return allJobs;
 }
 
 router.get("/sync", authRequired, async (req, res) => {
@@ -111,21 +123,20 @@ router.get("/sync", authRequired, async (req, res) => {
     return res.json({ message: "Already recently synced", jobs: cachedJobs });
   }
 
-  // Date Filters
+  
   const { DateIssued, DateIssuedFrom, DateIssuedTo } = req.query;
   const params = {};
   if (DateIssued) params.DateIssued = DateIssued;
   if (DateIssuedFrom) params.DateIssuedFrom = DateIssuedFrom;
   if (DateIssuedTo) params.DateIssuedTo = DateIssuedTo;
 
-  // Always enrich; control concurrency via env
+  
   const concurrency = Number.parseInt(process.env.ENRICH_CONCURRENCY || "5", 10);
 
   try {
-    // Fetch list
     const list = await fetchSimPROJobs(params);
 
-    // Enrich jobs
+    // enrich jobs
     let jobs = list;
     if (Array.isArray(list) && list.length) {
       const ids = list.map(j => j.ID).filter(Boolean);
@@ -139,7 +150,7 @@ router.get("/sync", authRequired, async (req, res) => {
       jobs = Array.from(byId.values());
     }
 
-    // Cache
+    // cache
     cachedJobs = jobs.map(normaliseJob);
     lastSyncTime = now;
 
@@ -302,13 +313,24 @@ async function inChunks(ids, size, fn) {
 }
 
 router.get("/jobs", authRequired, (req, res) => {
-  const jobs = filterAndSortJobs(cachedJobs, req.query);
-  const limit = Number.parseInt(req.query.limit, 10);
-  const limited = Number.isFinite(limit) && limit > 0 ? jobs.slice(0, limit) : jobs;
-  res.json({ jobs: limited });
+  let jobs = filterAndSortJobs(cachedJobs, req.query);
+
+  // pagination
+  const page = Number.parseInt(req.query.page, 10) || 1;
+  const pageSize = Number.parseInt(req.query.pageSize, 10) || jobs.length;
+  const start = (page - 1) * pageSize;
+  const paged = jobs.slice(start, start + pageSize);
+
+  res.json({
+    jobs: paged,
+    total: jobs.length,
+    page,
+    pageSize,
+    totalPages: Math.ceil(jobs.length / pageSize),
+  });
 });
 
-// Forward cleaned jobs to ML microservice
+// forward cleaned jobs to ML microservice
 router.post("/predict", authRequired, async (req, res) => {
   const jobsToSend = filterAndSortJobs(cachedJobs, req.query);
   const limit = Number.parseInt(req.query.limit, 10);
@@ -322,7 +344,7 @@ router.post("/predict", authRequired, async (req, res) => {
   }
 });
 
-// Token check
+// token check
 router.get("/oauth-test", async (_req, res) => {
   try {
     const token = await getSimproToken();
