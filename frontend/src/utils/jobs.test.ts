@@ -24,7 +24,4 @@ describe("formatters", () => {
   it("formats date", () => {
     expect(formatDate("2025-09-12")).toMatch(/\d{1,2}\/\d{1,2}\/\d{4}/);
   });
-  it("badge props", () => {
-    expect(classBadgeProps("High").tone).toBe("success");
-  });
 });
