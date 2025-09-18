@@ -5,6 +5,7 @@ import numpy as np
 import math
 import os
 import json
+import re
 import joblib
 import pandas as pd
 from sklearn.pipeline import Pipeline
@@ -32,8 +33,22 @@ class TrainRequest(BaseModel):
 
 def to_num(x):
     try:
-        if x is None or (isinstance(x, float) and np.isnan(x)):
+        # fast path for numerical values
+        if x is None:
             return None
+        if isinstance(x, (int, float)):
+            return None if (isinstance(x, float) and np.isnan(x)) else float(x)
+
+        # handle strings
+        if isinstance(x, str):
+            s = x.strip()
+            if not s:
+                return None
+            # strip currency symbols and thousands separators
+            s = re.sub(r'[^0-9eE\.\-+]', '', s)
+            return float(s)
+
+        # fallback: try generic cast
         return float(x)
     except Exception:
         return None
@@ -115,15 +130,29 @@ def build_dataframe(records: List[Dict[str, Any]]) -> Tuple[pd.DataFrame, Option
     Build a pandas DataFrame with expected columns from enriched job dicts.
     Returns (X, y) where y may be None if labels are not derivable.
     """
-    rows = []
-    labels = []
+    rows: List[Dict[str, Any]] = []
+    labels: List[Optional[str]] = []
+
     for j in records:
+        # convert numerics and include fallbacks
+        revenue = to_num(j.get("revenue") or (j.get("Total", {}) or {}).get("IncTax"))
+        materials = to_num(j.get("materials")) or 0.0
+        labour = to_num(j.get("labour")) or 0.0
+        overhead = to_num(j.get("overhead")) or 0.0
+
+        cost_total = to_num(j.get("cost_total"))
+        if cost_total is None:
+            # accept alternative estimate field name then fallback to sum of components
+            cost_total = to_num(j.get("cost_est_total"))
+        if cost_total is None and (materials or labour or overhead):
+            cost_total = materials + labour + overhead
+
         row = {
-            "revenue": to_num(j.get("revenue") or j.get("Total",{}).get("IncTax")),
-            "materials": to_num(j.get("materials")),
-            "labour": to_num(j.get("labour")),
-            "overhead": to_num(j.get("overhead")),
-            "cost_total": to_num(j.get("cost_total")),
+            "revenue": revenue,
+            "materials": materials if materials is not None else None,
+            "labour": labour if labour is not None else None,
+            "overhead": overhead if overhead is not None else None,
+            "cost_total": cost_total,
             "job_age_days": to_num(j.get("job_age_days")),
             "lead_time_days": to_num(j.get("lead_time_days")),
             "is_overdue": to_num(j.get("is_overdue")),
@@ -132,20 +161,24 @@ def build_dataframe(records: List[Dict[str, Any]]) -> Tuple[pd.DataFrame, Option
             "customerName": j.get("customerName"),
             "siteName": j.get("siteName"),
             "descriptionText": j.get("descriptionText") or "",
-            "_id": j.get("ID") or j.get("id")
+            "_id": j.get("ID") or j.get("id"),
         }
         rows.append(row)
-        # label handling
+
+        # label handling: prefer provided class; otherwise derive from the *row* (which has our fallbacks)
         lbl = j.get("profitability_class")
         if lbl is None:
-            lbl = derive_label(j)
+            lbl = derive_label(row)
         labels.append(lbl)
+
     df = pd.DataFrame(rows)
+
+    if df.shape[0] == 0:
+        return df, None
+
     if any(l is not None for l in labels):
         y = pd.Series([l if l is not None else "Unknown" for l in labels])
-        # remove Unknown rows for training
-        mask = y != "Unknown"
-        return df, (y.where(mask, None))
+        return df, y
     return df, None
 
 def build_pipeline(max_tfidf_features: int = 500) -> Pipeline:
@@ -196,6 +229,10 @@ def health():
 def train(payload: TrainRequest = Body(...)):
     # frame + labels
     df, y_all = build_dataframe(payload.data)
+
+    if df.empty:
+        return {"ok": False, "error": "No usable rows after preprocessing. Need either netMarginPct (or computable revenue+costs) or profitability_class."}
+
     if y_all is None:
         return {"ok": False, "error": "Could not derive labels from provided data (need netMarginPct or profitability_class)."}
 

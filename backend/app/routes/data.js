@@ -229,6 +229,14 @@ function normaliseJob(j) {
   const profit_est = revenue != null ? revenue - cost_est_total : null;
   const margin_est = (revenue && revenue > 0 && profit_est != null) ? (profit_est / revenue) : null;
 
+  let netMarginPct = margin_est ?? null;
+  let profitability_class = null;
+  if (netMarginPct != null) {
+    if (netMarginPct >= 0.20) profitability_class = "High";
+    else if (netMarginPct >= 0.05) profitability_class = "Medium";
+    else profitability_class = "Low";
+  }
+
   const dateIssued = j?.DateIssued ?? null;
   const dateDue = j?.DueDate ?? null;
   const age_days = dateIssued ? daysBetween(dateIssued, new Date()) : null;
@@ -260,6 +268,8 @@ function normaliseJob(j) {
     cost_est_total,
     profit_est,
     margin_est,
+    netMarginPct,
+    profitability_class,
     age_days,
     due_in_days,
 
