@@ -10,7 +10,7 @@ export default function Dashboard() {
   const [minRev, setMinRev] = useState<number | undefined>(undefined);
   const [maxRev, setMaxRev] = useState<number | undefined>(undefined);
   const [order, setOrder] = useState<"asc" | "desc">("asc");
-  const [limit, setLimit] = useState<number | undefined>(20);
+  const [limit, setLimit] = useState<number | undefined>(undefined);
   const [jobs, setJobs] = useState<ApiJob[]>([]);
   const [pred, setPred] = useState<{ avgProbability: number; profitableCount: number; count: number } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -142,7 +142,7 @@ export default function Dashboard() {
         <input
           className="border p-2"
           placeholder="Limit"
-          defaultValue={20}
+          value={limit ?? ""}
           onChange={(e) => setLimit(e.target.value ? Number(e.target.value) : undefined)}
           aria-label="Limit"
         />

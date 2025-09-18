@@ -23,11 +23,12 @@ function toNum(x) {
 function deriveRow(j) {
   // revenue fallback: revenue || Total.IncTax
   const rev = toNum(j.revenue ?? j.Total?.IncTax);
-  // costs: prefer cost_total; else sum materials/labour/overhead
-  const mat = toNum(j.materials) ?? 0;
-  const lab = toNum(j.labour) ?? 0;
-  const ovh = toNum(j.overhead) ?? 0;
-  const cost_total = toNum(j.cost_total) ?? (mat + lab + ovh || null);
+
+  // costs: prefer *_cost_est and cost_est_total; else fall back to legacy keys
+  const mat = toNum(j.materials_cost_est ?? j.materials) ?? 0;
+  const lab = toNum(j.labor_cost_est ?? j.labour) ?? 0;
+  const ovh = toNum(j.overhead_est ?? j.overhead) ?? 0;
+  const cost_total = toNum(j.cost_est_total ?? j.cost_total) ?? (mat + lab + ovh || null);
 
   // label: try netMarginPct; else compute if possible; else keep class
   let netMarginPct = j.netMarginPct;
@@ -44,9 +45,9 @@ function deriveRow(j) {
   return {
     ID: j.ID ?? j.id ?? null,
     revenue: rev ?? null,
-    materials: toNum(j.materials),
-    labour: toNum(j.labour),
-    overhead: toNum(j.overhead),
+    materials: mat,
+    labour: lab,
+    overhead: ovh,
     cost_total,
     statusName: j.statusName ?? null,
     jobType: j.jobType ?? null,

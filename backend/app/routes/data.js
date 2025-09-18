@@ -90,7 +90,7 @@ async function fetchSimPROJobs(params = {}) {
 
   let allJobs = [];
   let page = 1;
-  const pageSize = 250; // simPRO max page size
+  const pageSize = 250;
 
   while (true) {
     const pageParams = { ...params, page, pageSize };
@@ -101,10 +101,10 @@ async function fetchSimPROJobs(params = {}) {
         timeout: 20_000,
       });
       const jobs = Array.isArray(r.data) ? r.data : r.data?.jobs || [];
+      if (!jobs.length) break; 
       allJobs = allJobs.concat(jobs);
 
-      const resultCount = Number(r.headers["result-count"] || jobs.length);
-      if (resultCount < pageSize) break;
+      if (jobs.length < pageSize) break;
       page += 1;
     } catch (err) {
       const d = axiosDiag(err);
@@ -175,7 +175,7 @@ function getRevenue(j) {
 }
 
 function filterAndSortJobs(jobs, query) {
-  let { sortField = "revenue", order = "asc", minRevenue, maxRevenue, limit } = query;
+  let { sortField = "revenue", order = "asc", minRevenue, maxRevenue, limit, page, pageSize } = query;
   let filtered = [...jobs];
 
   if (minRevenue) filtered = filtered.filter(j => {
@@ -194,7 +194,8 @@ function filterAndSortJobs(jobs, query) {
     return A > B ? 1 : -1;
   });
 
-  if (limit) {
+  // only limit if no pagination
+  if (!page && !pageSize && limit) {
     const n = Number.parseInt(limit, 10);
     if (!Number.isNaN(n) && n > 0) filtered = filtered.slice(0, n);
   }
