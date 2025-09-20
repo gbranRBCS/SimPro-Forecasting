@@ -35,6 +35,41 @@ function authRequired(req, res, next) {
   });
 }
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// generic retry with rate-limit handling, backs off exponentially
+async function withRetries(fn, { maxRetries = 5, baseDelay = 1000 } = {}) {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (err) {
+      const status = err?.response?.status;
+      const code = err?.code;
+      const retryAfterSec = Number(err?.response?.headers?.["retry-after"]);
+      const retryableStatus = status === 429 || status === 502 || status === 503 || status === 504;
+      const retryableCode = code === "ECONNRESET" || code === "ETIMEDOUT";
+      if ((retryableStatus || retryableCode) && attempt < maxRetries) {
+        const jitterMs = Number.parseInt(process.env.SIMPRO_RETRY_JITTER_MS || "250", 10);
+        const base = Number.isFinite(retryAfterSec)
+          ? retryAfterSec * 1000
+          : baseDelay * Math.pow(2, attempt);
+        const delay = base + Math.floor(Math.random() * Math.max(0, jitterMs));
+        console.warn(
+          `simPRO retry: status=${status ?? code}, waiting ${delay}ms (attempt ${attempt + 1}/${maxRetries})`
+        );
+        await sleep(delay);
+        attempt++;
+        continue;
+      }
+      console.error("simPRO request failed:", axiosDiag(err));
+      throw err;
+    }
+  }
+}
+
 // OAuth token (cached)
 let cachedToken = null;
 let tokenExpiryMs = 0;
@@ -49,14 +84,18 @@ async function getSimproToken() {
   if (process.env.AUDIENCE) form.append("audience", process.env.AUDIENCE);
 
   try {
-    const resp = await axios.post(process.env.TOKEN_URL, form.toString(), {
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      auth: {
-        username: process.env.SIMPRO_CLIENT_ID,
-        password: process.env.SIMPRO_CLIENT_SECRET,
-      },
-      timeout: 15_000,
-    });
+    const resp = await withRetries(
+      () =>
+        axios.post(process.env.TOKEN_URL, form.toString(), {
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          auth: {
+            username: process.env.SIMPRO_CLIENT_ID,
+            password: process.env.SIMPRO_CLIENT_SECRET,
+          },
+          timeout: 15_000,
+        }),
+      { maxRetries: 4, baseDelay: 1500 }
+    );
 
     const { access_token, expires_in } = resp.data || {};
     if (!access_token) throw new Error("No access_token in token response");
@@ -71,100 +110,111 @@ async function getSimproToken() {
 }
 
 // simPRO fetch
-async function fetchSimPROJobs(params = {}) {
-  const base = process.env.SIMPRO_API_BASE;
+// exported for tests if needed
+export async function fetchSimPROJobs(params = {}) {
+  const base = process.env.SIMPRO_API_BASE || process.env.SIMPRO_API_URL;
   const companyId = process.env.SIMPRO_COMPANY_ID || "0";
-  let jobsPath =
-    (process.env.SIMPRO_JOBS_PATH || "/api/v1.0/companies/{COMPANY_ID}/jobs/")
-      .replace("{COMPANY_ID}", companyId);
-
-  if (!jobsPath.startsWith("/api/")) {
-    jobsPath = "/api" + (jobsPath.startsWith("/") ? jobsPath : "/" + jobsPath);
-  }
-  if (!jobsPath.endsWith("/")) {
-    jobsPath += "/";
-  }
-
-  const url = new URL(jobsPath, base).toString();
   const token = await getSimproToken();
 
-  let allJobs = [];
+  // max 250 per docs; allow override (capped at 250)
+  const pageSizeEnv = parseInt(process.env.SIMPRO_PAGE_SIZE || "250", 10);
+  const pageSize = Math.min(Number.isFinite(pageSizeEnv) ? pageSizeEnv : 250, 250);
+
+  const pageDelayMs = parseInt(process.env.SIMPRO_PAGE_DELAY_MS || "200", 10) || 0;
+  const pageJitterMs = parseInt(process.env.SIMPRO_PAGE_JITTER_MS || "150", 10) || 0;
+
+  const url = new URL(`/api/v1.0/companies/${companyId}/jobs/`, base).toString();
+
+  const allJobs = [];
   let page = 1;
-  const pageSize = 250;
 
-  while (true) {
+  for (;;) {
     const pageParams = { ...params, page, pageSize };
-    try {
-      const r = await axios.get(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        params: pageParams,
-        timeout: 20_000,
-      });
-      const jobs = Array.isArray(r.data) ? r.data : r.data?.jobs || [];
-      if (!jobs.length) break; 
-      allJobs = allJobs.concat(jobs);
+    const resp = await withRetries(
+      () =>
+        axios.get(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          params: pageParams,
+          timeout: 20_000,
+        }),
+      { maxRetries: 5, baseDelay: 1000 }
+    );
 
-      if (jobs.length < pageSize) break;
-      page += 1;
-    } catch (err) {
-      const d = axiosDiag(err);
-      console.error("fetchSimPROJobs() failed:", d);
-      const e = new Error("simPRO jobs fetch failed");
-      e.detail = d;
-      throw e;
+    const jobs = Array.isArray(resp.data) ? resp.data : resp.data?.jobs || [];
+
+ 
+    if (!jobs.length) break;
+
+    allJobs.push(...jobs);
+
+
+    if (jobs.length < pageSize) break;
+
+    page += 1;
+
+    // soft throttle between pages
+    if (pageDelayMs > 0 || pageJitterMs > 0) {
+      const delay = pageDelayMs + Math.floor(Math.random() * Math.max(0, pageJitterMs));
+      await sleep(delay);
     }
   }
+
   return allJobs;
 }
 
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+// generic retry with rate-limit handling, backs off exponentially
+async function withRetries(fn, { maxRetries = 5, baseDelay = 1000 } = {}) {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await fn();
+    } catch (err) {
+      const status = err?.response?.status;
+      const retryAfterSec = Number(err?.response?.headers?.["retry-after"]);
+      if (status === 429 && attempt < maxRetries) {
+        const delay = Number.isFinite(retryAfterSec)
+          ? retryAfterSec * 1000
+          : baseDelay * Math.pow(2, attempt);
+        console.warn(
+          `simPRO 429 - retrying in ${Math.round(delay)}ms (attempt ${
+            attempt + 1
+          }/${maxRetries})`
+        );
+        await sleep(delay);
+        attempt++;
+        continue;
+      }
+      console.error("simPRO request failed:", axiosDiag(err));
+      throw err;
+    }
+  }
+}
+
+let syncing = false;
+
 router.get("/sync", authRequired, async (req, res) => {
+  if (syncing) return res.status(409).json({ message: "Sync already in progress" });
+
   const now = Date.now();
-  if (!req.query.force && lastSyncTime && now - lastSyncTime < syncInterval * 60 * 1000) {
+  if (lastSyncTime && now - lastSyncTime < syncInterval * 60 * 1000 && cachedJobs.length) {
     return res.json({ message: "Already recently synced", jobs: cachedJobs });
   }
 
-  
-  const { DateIssued, DateIssuedFrom, DateIssuedTo } = req.query;
-  const params = {};
-  if (DateIssued) params.DateIssued = DateIssued;
-  if (DateIssuedFrom) params.DateIssuedFrom = DateIssuedFrom;
-  if (DateIssuedTo) params.DateIssuedTo = DateIssuedTo;
-
-  
-  const concurrency = Number.parseInt(process.env.ENRICH_CONCURRENCY || "5", 10);
-
+  syncing = true;
   try {
-    const list = await fetchSimPROJobs(params);
-
-    // enrich jobs
-    let jobs = list;
-    if (Array.isArray(list) && list.length) {
-      const ids = list.map(j => j.ID).filter(Boolean);
-      const results = await inChunks(ids, concurrency, (id) => fetchJobDetail(id));
-
-      const byId = new Map(list.map(j => [j.ID, j]));
-      results.forEach((r, idx) => {
-        const id = ids[idx];
-        if (r.status === "fulfilled") byId.set(id, r.value);
-      });
-      jobs = Array.from(byId.values());
-    }
-
-    // cache
-    cachedJobs = jobs.map(normaliseJob);
+    const list = await fetchSimPROJobs(/* optional filters */);
+    cachedJobs = list;
     lastSyncTime = now;
-
-    res.json({
-      message: "Sync + enrich successful",
-      count: cachedJobs.length,
-      enriched: Array.isArray(cachedJobs) ? cachedJobs.length : 0,
-      jobs: cachedJobs,
-    });
+    res.json({ message: "Sync was successful", jobs: cachedJobs });
   } catch (err) {
-    res.status(500).json({
-      error: "Failed to fetch simPRO job data.",
-      detail: err.detail || { message: err.message },
-    });
+    console.error("Sync failed:", axiosDiag(err) || err);
+    res.status(502).json({ error: "Failed to fetch simPRO data" });
+  } finally {
+    syncing = false;
   }
 });
 
@@ -299,7 +349,9 @@ async function fetchJobDetail(jobId) {
 const url = new URL(`/api/v1.0/companies/${companyId}/jobs/${jobId}`, base).toString();
   const token = await getSimproToken();
 
-  const r = await axios.get(url, { headers: { Authorization: `Bearer ${token}` }, timeout: 20_000 });
+  const r = await withRetries(() =>
+    axios.get(url, { headers: { Authorization: `Bearer ${token}` }, timeout: 20_000 })
+  );
   return r.data;
 }
 

@@ -1,4 +1,16 @@
 export function toJobRowView(j: any) {
+  // fallbacks for profitability info
+  let profitClass = j.profitability?.class ?? j.profitability_class ?? null;
+  let profitScore =
+    j.profitability?.score ??
+    (typeof j.netMarginPct === "number" ? j.netMarginPct : null);
+
+  if (!profitClass && typeof j.netMarginPct === "number") {
+    if (j.netMarginPct >= 0.10) profitClass = "High";
+    else if (j.netMarginPct >= 0.03) profitClass = "Medium";
+    else profitClass = "Low";
+  }
+
   return {
     id: j.ID,
     name: j.Name ?? j.RequestNo ?? `Job ${j.ID}`,
@@ -9,8 +21,9 @@ export function toJobRowView(j: any) {
     issued: j.dateIssued ?? j.DateIssued ?? null,
     due: j.dateDue ?? j.DueDate ?? null,
 
-    profitClass: j.profitability?.class ?? null,
-    profitScore: j.profitability?.score ?? null,
+    profitClass,
+    profitScore,
+    profitEst: j.profit_est ?? null,
   };
 }
 

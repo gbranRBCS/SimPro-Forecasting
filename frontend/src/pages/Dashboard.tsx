@@ -224,7 +224,11 @@ export default function Dashboard() {
                           ? "bg-red-50 border-red-300 text-red-800"
                           : "bg-gray-50 border-gray-300 text-gray-700"
                       }`}
-                      title={v.profitScore != null ? `score: ${v.profitScore}` : undefined}
+                      title={
+                        v.profitScore != null
+                          ? `margin: ${(v.profitScore * 100).toFixed(1)}%`
+                          : undefined
+                      }
                     >
                       {badge.label}
                     </span>
