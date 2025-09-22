@@ -1,28 +1,36 @@
 export function toJobRowView(j: any) {
-  // fallbacks for profitability info
+  // profitability fallbacks
   let profitClass = j.profitability?.class ?? j.profitability_class ?? null;
-  let profitScore =
-    j.profitability?.score ??
-    (typeof j.netMarginPct === "number" ? j.netMarginPct : null);
 
-  if (!profitClass && typeof j.netMarginPct === "number") {
-    if (j.netMarginPct >= 0.10) profitClass = "High";
-    else if (j.netMarginPct >= 0.03) profitClass = "Medium";
+  // if no nested class but we have a margin, infer a class
+  const margin = typeof j.netMarginPct === "number" ? j.netMarginPct : null;
+  if (!profitClass && margin != null) {
+    if (margin > 0.64) profitClass = "High";
+    else if (margin >= 0.44) profitClass = "Medium";
     else profitClass = "Low";
   }
 
+  const profitScore =
+    j.profitability?.score ??
+    (typeof j.netMarginPct === "number" ? j.netMarginPct : null);
+
+  const profitScoreType =
+    j.profitability?.scoreType ??
+    (typeof j.netMarginPct === "number" ? "margin" : null);
+
   return {
-    id: j.ID,
-    name: j.Name ?? j.RequestNo ?? `Job ${j.ID}`,
+    id: j.ID ?? j.id,
+    name: j.Name ?? j.RequestNo ?? `Job ${j.ID ?? j.id ?? ""}`,
     customer: j.customerName ?? j.Customer?.CompanyName ?? "—",
     site: j.siteName ?? j.Site?.Name ?? "—",
-    status: j.status?.Name ?? j.Stage ?? "—",
+    status: j.statusName ?? j.status?.Name ?? j.Stage ?? "—",
     revenue: j.revenue ?? j?.Total?.IncTax ?? null,
     issued: j.dateIssued ?? j.DateIssued ?? null,
     due: j.dateDue ?? j.DueDate ?? null,
 
     profitClass,
     profitScore,
+    profitScoreType,
     profitEst: j.profit_est ?? null,
   };
 }

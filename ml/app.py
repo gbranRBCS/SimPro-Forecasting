@@ -48,7 +48,7 @@ def to_num(x):
             s = re.sub(r'[^0-9eE\.\-+]', '', s)
             return float(s)
 
-        # fallback: try generic cast
+        # fallback: try simple casting
         return float(x)
     except Exception:
         return None
@@ -107,8 +107,8 @@ CLASS_LABELS = ["Low","Medium","High"]
 
 def derive_label(row: Dict[str, Any]) -> Optional[str]:
     """
-    Create a 3-class profitability label from net margin percentage, if possible.
-    Thresholds: High >= 0.20, Medium 0.05–0.20, Low < 0.05
+    create a 3-class profitability heuristic label from net margin percentage if present
+    Thresholds: High > 0.64, Medium 0.44–0.64, Low < 0.44
     """
     # prefer explicit netMarginPct if present
     p = to_num(row.get("netMarginPct"))
@@ -119,22 +119,22 @@ def derive_label(row: Dict[str, Any]) -> Optional[str]:
             p = (rev - cost) / rev
     if p is None:
         return None
-    if p >= 0.20:
+    if p > 0.64:
         return "High"
-    if p >= 0.05:
+    if p >= 0.44:
         return "Medium"
     return "Low"
 
 def build_dataframe(records: List[Dict[str, Any]]) -> Tuple[pd.DataFrame, Optional[pd.Series]]:
     """
-    Build a pandas DataFrame with expected columns from enriched job dicts.
-    Returns (X, y) where y may be None if labels are not derivable.
+    build a pandas DataFrame with expected columns from enriched job dictionaries
+    returns (X, y) where y may be None if labels are not available
     """
     rows: List[Dict[str, Any]] = []
     labels: List[Optional[str]] = []
 
     for j in records:
-        # convert numerics and include fallbacks
+        # convert numbers and include fallbacks
         revenue = to_num(j.get("revenue") or (j.get("Total", {}) or {}).get("IncTax"))
         materials = to_num(j.get("materials")) or 0.0
         labour = to_num(j.get("labour")) or 0.0
@@ -142,7 +142,7 @@ def build_dataframe(records: List[Dict[str, Any]]) -> Tuple[pd.DataFrame, Option
 
         cost_total = to_num(j.get("cost_total"))
         if cost_total is None:
-            # accept alternative estimate field name then fallback to sum of components
+            # accept alternative estimate field name then fallback to sum of components if necessary
             cost_total = to_num(j.get("cost_est_total"))
         if cost_total is None and (materials or labour or overhead):
             cost_total = materials + labour + overhead
@@ -165,7 +165,7 @@ def build_dataframe(records: List[Dict[str, Any]]) -> Tuple[pd.DataFrame, Option
         }
         rows.append(row)
 
-        # label handling: prefer provided class; otherwise derive from the *row* (which has our fallbacks)
+        # label handling: prefer provided class, else take from the row (which has our fallbacks)
         lbl = j.get("profitability_class")
         if lbl is None:
             lbl = derive_label(row)

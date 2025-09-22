@@ -3,8 +3,12 @@ import api from "../../lib/api";
 export type ApiJob = Record<string, any>;
 export type Prediction = {
   jobId: number | string | null;
-  profitable: boolean;
-  probability: number; // 0..1
+  // trained model fields
+  class?: "Low" | "Medium" | "High";
+  confidence?: number;
+  // fallback heuristic fields (older shape)
+  profitable?: boolean;
+  probability?: number;
   profit_est?: number | null;
   margin_est?: number | null;
 };

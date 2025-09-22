@@ -76,6 +76,46 @@ async function withRetries(fn, { maxRetries = 5, baseDelay = 1000 } = {}) {
   }
 }
 
+const requestGapMs = Math.max(
+  0,
+  parseInt(process.env.SIMPRO_REQUEST_INTERVAL_MS || "500", 10) || 0,
+);
+const throttlePenaltyMs = Math.max(
+  requestGapMs,
+  parseInt(process.env.SIMPRO_THROTTLE_PENALTY_MS || `${requestGapMs * 4}`, 10) ||
+    requestGapMs,
+);
+let simproQueue = Promise.resolve();
+let nextAllowedRequestAt = 0;
+
+function scheduleSimproRequest(makeRequest, label = "simpro") {
+  const run = simproQueue.then(async () => {
+    const now = Date.now();
+    const waitFor = Math.max(0, nextAllowedRequestAt - now);
+      await sleep(waitFor);
+
+    try {
+      const result = await makeRequest();
+      nextAllowedRequestAt = Date.now() + requestGapMs;
+      return result;
+    } catch (err) {
+      const status = err?.response?.status;
+      const retryAfterSec = Number(err?.response?.headers?.["retry-after"]);
+      if (Number.isFinite(retryAfterSec) && retryAfterSec > 0) {
+        nextAllowedRequestAt = Date.now() + retryAfterSec * 1000;
+      } else if (status === 429) {
+        nextAllowedRequestAt = Date.now() + throttlePenaltyMs;
+      } else {
+        nextAllowedRequestAt = Date.now() + requestGapMs;
+      }
+      throw err;
+    }
+  });
+
+  simproQueue = run.catch(() => {});
+  return run;
+}
+
 // OAuth token (cached)
 let cachedToken = null;
 let tokenExpiryMs = 0;
@@ -135,22 +175,73 @@ export async function fetchSimPROJobs(params = {}) {
   const token = await getSimproToken();
 
   const pageSizeEnv = parseInt(process.env.SIMPRO_PAGE_SIZE || "250", 10);
-  const pageSize = Math.min(
-    Number.isFinite(pageSizeEnv) ? pageSizeEnv : 250,
-    250,
-  );
+  const pageSize = Math.min(Number.isFinite(pageSizeEnv) ? pageSizeEnv : 250, 250);
 
-  const pageDelayMs =
-    parseInt(process.env.SIMPRO_PAGE_DELAY_MS || "0", 10) || 0;
-  const pageJitterMs =
-    parseInt(process.env.SIMPRO_PAGE_JITTER_MS || "0", 10) || 0;
+  const pageDelayMs = parseInt(process.env.SIMPRO_PAGE_DELAY_MS || "0", 10) || 0;
+  const pageJitterMs = parseInt(process.env.SIMPRO_PAGE_JITTER_MS || "0", 10) || 0;
+
+  // LIMIT FOR TESTING: stop after fetching up to determined maximum
+  const MAX_SYNC_JOBS = 200;
 
   const allJobs = [];
-  let page = 1;
 
+  // if historical window is requested, fetch from the oldest pages first.
+  const historicalWindow = !!(params?.DateIssuedFrom || params?.DateIssuedTo);
+
+  if (historicalWindow) {
+    // First request to read total pages from headers
+    const headResp = await withRetries(
+      () =>
+        axios.get(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          params: { ...params, page: 1, pageSize },
+          timeout: 20_000,
+        }),
+      { maxRetries: 5, baseDelay: 1000 }
+    );
+
+    const totalPages =
+      parseInt(headResp.headers["result-pages"] ?? headResp.headers["Result-Pages"] ?? "1", 10) || 1;
+
+    let page = totalPages;
+    for (;;) {
+      const pageParams = { ...params, page, pageSize };
+      const resp = await withRetries(
+        () =>
+          axios.get(url, {
+            headers: { Authorization: `Bearer ${token}` },
+            params: pageParams,
+            timeout: 20_000,
+          }),
+        { maxRetries: 5, baseDelay: 1000 }
+      );
+
+      const jobs = Array.isArray(resp.data) ? resp.data : resp.data?.jobs || [];
+      if (!jobs.length) break;
+
+      allJobs.push(...jobs);
+
+      if (allJobs.length >= MAX_SYNC_JOBS) {
+        allJobs.length = MAX_SYNC_JOBS;
+        break;
+      }
+
+      page -= 1;
+      if (page < 1) break;
+
+      if (pageDelayMs > 0 || pageJitterMs > 0) {
+        const delay = pageDelayMs + Math.floor(Math.random() * Math.max(0, pageJitterMs));
+        await sleep(delay);
+      }
+    }
+
+    return allJobs;
+  }
+
+  // default - newest-first forward paging 
+  let page = 1;
   for (;;) {
     const pageParams = { ...params, page, pageSize };
-
     const resp = await withRetries(
       () =>
         axios.get(url, {
@@ -158,7 +249,7 @@ export async function fetchSimPROJobs(params = {}) {
           params: pageParams,
           timeout: 20_000,
         }),
-      { maxRetries: 5, baseDelay: 1000 },
+      { maxRetries: 5, baseDelay: 1000 }
     );
 
     const jobs = Array.isArray(resp.data) ? resp.data : resp.data?.jobs || [];
@@ -166,13 +257,17 @@ export async function fetchSimPROJobs(params = {}) {
 
     allJobs.push(...jobs);
 
+    if (allJobs.length >= MAX_SYNC_JOBS) {
+      allJobs.length = MAX_SYNC_JOBS;
+      break;
+    }
+
     if (jobs.length < pageSize) break;
     page += 1;
 
     if (pageDelayMs > 0 || pageJitterMs > 0) {
-      const delay =
-        pageDelayMs + Math.floor(Math.random() * Math.max(0, pageJitterMs));
-      if (delay > 0) await sleep(delay);
+      const delay = pageDelayMs + Math.floor(Math.random() * Math.max(0, pageJitterMs));
+      await sleep(delay);
     }
   }
 
@@ -326,10 +421,14 @@ async function fetchJobDetail(jobId) {
 
   const resp = await withRetries(
     () =>
-      axios.get(url, {
-        headers: { Authorization: `Bearer ${token}` },
-        timeout: 20_000,
-      }),
+      scheduleSimproRequest(
+        () =>
+          axios.get(url, {
+            headers: { Authorization: `Bearer ${token}` },
+            timeout: 20_000,
+          }),
+        `job-${jobId}`,
+      ),
     { maxRetries: 4, baseDelay: 1200 },
   );
 
@@ -366,6 +465,7 @@ router.get("/sync", authRequired, async (req, res) => {
   if (DateIssuedFrom) params.DateIssuedFrom = DateIssuedFrom;
   if (DateIssuedTo) params.DateIssuedTo = DateIssuedTo;
 
+
   const concurrency = Number.parseInt(
     process.env.ENRICH_CONCURRENCY || "5",
     10,
@@ -375,26 +475,42 @@ router.get("/sync", authRequired, async (req, res) => {
   try {
     const list = await fetchSimPROJobs(params);
 
-    let jobs = list;
-    if (Array.isArray(list) && list.length) {
-      const ids = list.map((j) => j.ID).filter(Boolean);
-      const results = await inChunks(ids, concurrency, (id) =>
-        fetchJobDetail(id),
-      );
-      const byId = new Map(list.map((j) => [j.ID, j]));
-      results.forEach((result, idx) => {
-        const id = ids[idx];
-        if (result.status === "fulfilled") byId.set(id, result.value);
-      });
-      jobs = Array.from(byId.values());
+    // enrich every job, but stop once enough enriched jobs are collected
+    const KEEP_MAX = Number.parseInt(process.env.SIMPRO_SYNC_MAX || "100", 10);
+    const idsAll = Array.isArray(list) ? list.map((j) => j.ID).filter(Boolean) : [];
+    const byIdBase = new Map(Array.isArray(list) ? list.map((j) => [j.ID, j]) : []);
+
+    const kept = [];
+    for (let i = 0; i < idsAll.length && kept.length < KEEP_MAX; i += concurrency) {
+      const slice = idsAll.slice(i, i + concurrency);
+      // fetch details for this chunk (with retries inside fetchJobDetail)
+      const settled = await Promise.allSettled(slice.map((id) => fetchJobDetail(id)));
+      for (let s = 0; s < settled.length && kept.length < KEEP_MAX; s++) {
+        const id = slice[s];
+        const base = byIdBase.get(id) || {};
+        const detail = settled[s].status === "fulfilled" ? settled[s].value : {};
+        const merged = { ...base, ...(detail || {}) };
+        const norm = normaliseJob(merged);
+        if (norm && (norm.netMarginPct != null || norm.profitability_class != null)) {
+          kept.push(norm);
+        }
+      }
+      // small gap between chunks to reduce burstiness (honour requestGapMs)
+      if (requestGapMs > 0) await sleep(requestGapMs);
     }
 
-    cachedJobs = jobs.map(normaliseJob);
-    lastSyncTime = now;
+    const excludedCount = Array.isArray(list) ? list.length - kept.length : 0;
+    if (excludedCount > 0) {
+      console.info(`Sync: excluded ${excludedCount} jobs without netMarginPct/profitability_class (kept ${kept.length})`);
+    }
+
+    cachedJobs = kept;
+     lastSyncTime = now;
 
     res.json({
       message: "Sync + enrich successful",
       count: cachedJobs.length,
+      excluded: excludedCount,
       jobs: cachedJobs,
     });
   } catch (err) {

@@ -14,10 +14,23 @@ const PASS = arg('pass');
 const TOKEN = arg('token');
 const OUT  = arg('out', 'ml/train.json');
 
+// date-range + limit arguments for historical data sync
+const FROM = arg('from', '2010-01-01');           // default start (very old)
+const TO   = arg('to', '2024-03-31');             // default end: end of 2024 Q1
+const LIMIT = Number(arg('limit', '50'));         // how many jobs to read after syncing
+
 function toNum(x) {
   if (x === null || x === undefined) return null;
   const n = typeof x === 'number' ? x : parseFloat(String(x).replace(/[,£$]/g,''));
   return Number.isFinite(n) ? n : null;
+}
+
+function computeProfitClassFromMargin(p) {
+  if (p == null) return null;
+  // match ml/app.py derive_label thresholds: High > 0.64, Medium >= 0.44, else Low
+  if (p > 0.64) return "High";
+  if (p >= 0.44) return "Medium";
+  return "Low";
 }
 
 function deriveRow(j) {
@@ -37,7 +50,10 @@ function deriveRow(j) {
   }
 
   // if still no margin, accept profitability_class 
-  const profitability_class = j.profitability_class ?? null;
+  const profitability_class_backend = j.profitability_class ?? null;
+
+  // prefer computed class (ML thresholds) - fall back to backend-provided class only if compute returns null
+  const profitability_class = computeProfitClassFromMargin(netMarginPct) ?? profitability_class_backend;
 
   // keep only if we have margin || class
   if (netMarginPct == null && !profitability_class) return null;
@@ -74,11 +90,14 @@ async function main() {
   }
   const h = { Authorization: `Bearer ${jwt}` };
 
-  await axios.get(`${BASE}/data/sync`, { headers: h });
+  // ask backend to sync historical range
+  console.log(`Requesting sync for DateIssuedFrom=${FROM} DateIssuedTo=${TO}`);
+  await axios.get(`${BASE}/data/sync`, { headers: h, params: { DateIssuedFrom: FROM, DateIssuedTo: TO, force: 1 } });
+
 
   const jobsRes = await axios.get(`${BASE}/data/jobs`, {
     headers: h,
-    params: { date: '2019-01-01,2035-12-31', order: 'date', limit:50 }
+    params: { order: 'date', limit: LIMIT }
   });
 
   const jobs = jobsRes.data?.jobs ?? jobsRes.data ?? [];
