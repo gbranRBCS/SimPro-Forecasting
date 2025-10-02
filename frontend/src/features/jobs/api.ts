@@ -29,7 +29,7 @@ export async function getJobs(params: any) {
 }
 
 
-export async function predict(params: any) {
-  const res = await api.post("/data/predict", null, { params });
+export async function predict(params: Record<string, any>) {
+  const res = await api.post("/data/predict", {}, { params });
   return res.data;
 }

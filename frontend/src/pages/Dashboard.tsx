@@ -76,7 +76,12 @@ export default function Dashboard() {
     setLoading(true);
     setMsg(null);
     try {
-      const r = await predict({ jobs });
+      const predictParams: Record<string, any> = { sortField: "revenue", order };
+      if (typeof minRev === "number") predictParams.minRevenue = minRev;
+      if (typeof maxRev === "number") predictParams.maxRevenue = maxRev;
+      if (typeof limit === "number") predictParams.limit = limit;
+
+      const r = await predict(predictParams);
       const preds: Prediction[] = r?.predictions ?? [];
 
       // index predictions by jobId
@@ -153,7 +158,30 @@ export default function Dashboard() {
 
       setPred({ highCount, mediumCount, lowCount, count, avgConfidence });
     } catch (e: any) {
-      setMsg(e?.response?.data?.error || "Predict failed");
+      const respData = e?.response?.data;
+      if (respData) {
+        const parts: string[] = [];
+        const baseMsg = respData.error || respData.message || "Predict failed";
+        if (baseMsg) parts.push(baseMsg);
+        if (respData.mlStatus) parts.push(`ML status ${respData.mlStatus}`);
+        if (respData.mlBody) {
+          if (typeof respData.mlBody === "string") {
+            parts.push(respData.mlBody);
+          } else if (respData.mlBody?.error || respData.mlBody?.message) {
+            parts.push(respData.mlBody.error || respData.mlBody.message);
+          } else {
+            try {
+              parts.push(JSON.stringify(respData.mlBody));
+            } catch (_) {
+              // ignore stringify errors
+            }
+          }
+        }
+        setMsg(parts.join(" - "));
+      } else {
+        setMsg(e?.message || "Predict failed");
+      }
+      setPred(null);
     } finally {
       setLoading(false);
     }
