@@ -114,6 +114,27 @@ describe("Data Routes", () => {
             .post("/data/predict")
             .set("Authorization", `Bearer ${getToken()}`);
         expect(res2.body.error).toMatch(/ML Prediction failed/i);
-        expect(res2.status).toBe(500);
+        expect(res2.status).toBe(502);
+    });
+
+    test("/predict accepts jobIds in the request body", async () => {
+        axios.get.mockResolvedValueOnce({ data: jobsMock });
+        await request(app)
+            .get("/data/sync")
+            .set("Authorization", `Bearer ${getToken()}`);
+
+        axios.post.mockResolvedValueOnce({ data: { predictions: [{ jobId: 2, class: "High" }] } });
+
+        const res = await request(app)
+            .post("/data/predict")
+            .send({ jobIds: [2] })
+            .set("Authorization", `Bearer ${getToken()}`);
+
+        expect(axios.post).toHaveBeenCalledWith(
+            `${process.env.ML_URL}/predict`,
+            { data: [{ id: 2, revenue: 200, date: "2024-01-02" }] }
+        );
+        expect(res.status).toBe(200);
+        expect(res.body.predictions).toEqual([{ jobId: 2, class: "High" }]);
     });
 });

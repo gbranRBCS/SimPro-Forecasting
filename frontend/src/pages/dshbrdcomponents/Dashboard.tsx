@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Briefcase } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Briefcase } from '../../components/icons';
 import { syncJobs, getJobs, predict } from '../../features/jobs/api';
 import { Toolbar } from './Toolbar';
 import { JobsTable } from './JobsTable';
@@ -44,6 +44,83 @@ type PredictionSummaryData = {
   avgConfidence?: number;
 };
 
+type LoadOptions = {
+  preloadedJobs?: ApiJob[];
+  statusPrefix?: string;
+};
+
+function getRevenueValue(job: ApiJob): number | null {
+  if (!job) return null;
+
+  const direct = job.revenue;
+  if (typeof direct === 'number' && Number.isFinite(direct)) {
+    return direct;
+  }
+
+  const incTax = job?.Total?.IncTax;
+  if (typeof incTax === 'number' && Number.isFinite(incTax)) {
+    return incTax;
+  }
+  if (typeof incTax === 'string') {
+    const parsed = Number(incTax);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return null;
+}
+
+function filterJobsLocally(
+  jobs: ApiJob[],
+  filters: FilterState,
+  page: number,
+  pageSize: number,
+) {
+  const safePage = page && page > 0 ? page : 1;
+  const safePageSize = pageSize && pageSize > 0 ? pageSize : jobs.length || 1;
+
+  let filtered = Array.isArray(jobs) ? [...jobs] : [];
+
+  if (filters.minRevenue) {
+    const min = Number(filters.minRevenue);
+    if (!Number.isNaN(min)) {
+      filtered = filtered.filter((job) => {
+        const revenue = getRevenueValue(job);
+        return revenue != null && revenue >= min;
+      });
+    }
+  }
+
+  if (filters.maxRevenue) {
+    const max = Number(filters.maxRevenue);
+    if (!Number.isNaN(max)) {
+      filtered = filtered.filter((job) => {
+        const revenue = getRevenueValue(job);
+        return revenue != null && revenue <= max;
+      });
+    }
+  }
+
+  filtered.sort((a, b) => {
+    const revA = getRevenueValue(a);
+    const revB = getRevenueValue(b);
+    const fallback = filters.order === 'desc' ? -Infinity : Infinity;
+    const valA = revA != null ? revA : fallback;
+    const valB = revB != null ? revB : fallback;
+
+    if (valA === valB) return 0;
+    if (filters.order === 'desc') return valA > valB ? -1 : 1;
+    return valA > valB ? 1 : -1;
+  });
+
+  const start = (safePage - 1) * safePageSize;
+  const paged = start >= 0 ? filtered.slice(start, start + safePageSize) : filtered.slice(0, safePageSize);
+
+  const total = filtered.length;
+  const totalPages = safePageSize > 0 ? Math.max(1, Math.ceil(total / safePageSize)) : 1;
+
+  return { jobs: paged, total, totalPages };
+}
+
 export function Dashboard() {
   const [filters, setFilters] = useState<FilterState>({
     fromDate: '',
@@ -69,40 +146,131 @@ export function Dashboard() {
   } | null>(null);
   const [predictionSummary, setPredictionSummary] =
     useState<PredictionSummaryData | null>(null);
+  const cachedJobsRef = useRef<ApiJob[]>([]);
 
-  const loadJobs = async (newPage?: number, newPageSize?: number) => {
-    setIsLoading(true);
+  const updateCache = (items: ApiJob[] | undefined | null) => {
+    if (Array.isArray(items) && items.length > 0) {
+      cachedJobsRef.current = items;
+    }
+  };
+
+   const loadJobs = async (
+    newPage?: number,
+    newPageSize?: number,
+    options?: LoadOptions,
+  ) => {
+    const pageToLoad = newPage ?? pagination.page;
+    const sizeToLoad = newPageSize ?? pagination.pageSize;
+    const hasPreloaded = Array.isArray(options?.preloadedJobs);
+
+    if (!hasPreloaded) {
+      setIsLoading(true);
+    } else {
+      setIsLoading(false);
+    }
+
     setStatusMessage(null);
     setPredictionSummary(null);
 
     try {
-      const params: any = {
-        sortField: 'revenue',
-        order: filters.order,
-        page: newPage ?? pagination.page,
-        pageSize: newPageSize ?? pagination.pageSize,
-      };
+      let jobsData: ApiJob[] = [];
+      let totalPages = 1;
+      let totalCount = 0;
+      let usedCachedFallback = false;
 
-      if (filters.minRevenue) {
-        params.minRevenue = Number(filters.minRevenue);
-      }
-      if (filters.maxRevenue) {
-        params.maxRevenue = Number(filters.maxRevenue);
-      }
-      if (filters.limit) {
-        params.limit = Number(filters.limit);
+      if (hasPreloaded && options?.preloadedJobs) {
+        updateCache(options.preloadedJobs);
+        const local = filterJobsLocally(
+          options.preloadedJobs,
+          filters,
+          pageToLoad,
+          sizeToLoad,
+        );
+        jobsData = local.jobs;
+        totalPages = local.totalPages;
+        totalCount = local.total;
+      } else {
+        const params: any = {
+          sortField: 'revenue',
+          order: filters.order,
+          page: pageToLoad,
+          pageSize: sizeToLoad,
+        };
+
+        if (filters.minRevenue) {
+          const min = Number(filters.minRevenue);
+          if (!Number.isNaN(min)) params.minRevenue = min;
+        }
+        if (filters.maxRevenue) {
+          const max = Number(filters.maxRevenue);
+          if (!Number.isNaN(max)) params.maxRevenue = max;
+        }
+        if (filters.limit) {
+          const limit = Number(filters.limit);
+          if (!Number.isNaN(limit)) params.limit = limit;
+        }
+
+        const data = await getJobs(params);
+        const fetchedJobs = Array.isArray(data?.jobs) ? data.jobs : [];
+        const reportedTotal =
+          typeof data?.total === 'number' ? data.total : fetchedJobs.length;
+
+        if (fetchedJobs.length > 0) {
+          updateCache(fetchedJobs);
+          jobsData = fetchedJobs;
+          totalPages = data?.totalPages ?? 1;
+          totalCount = reportedTotal;
+        } else if (cachedJobsRef.current.length > 0) {
+          const fallback = filterJobsLocally(
+            cachedJobsRef.current,
+            filters,
+            pageToLoad,
+            sizeToLoad,
+          );
+          jobsData = fallback.jobs;
+          totalPages = fallback.totalPages;
+          totalCount = fallback.total;
+          usedCachedFallback = true;
+        } else {
+          jobsData = fetchedJobs;
+          totalPages = data?.totalPages ?? 1;
+          totalCount = reportedTotal;
+        }
       }
 
-      const data = await getJobs(params);
-      setJobs(data?.jobs ?? []);
+      setJobs(jobsData);
       setPagination((prev) => ({
         ...prev,
-        page: newPage ?? prev.page,
-        pageSize: newPageSize ?? prev.pageSize,
-        totalPages: data?.totalPages ?? 1,
+        page: pageToLoad,
+        pageSize: sizeToLoad,
+        totalPages: totalPages > 0 ? totalPages : 1,
       }));
+
+      const showingCount = jobsData.length;
+      const totalForMessage =
+        totalCount > 0 ? totalCount : showingCount;
+
+      let messageText: string;
+      if (options?.statusPrefix) {
+        const countText =
+          totalForMessage > showingCount
+            ? `${showingCount} of ${totalForMessage}`
+            : `${showingCount}`;
+        messageText = `${options.statusPrefix} · Showing ${countText} jobs`;
+      } else if (usedCachedFallback) {
+        const countText =
+          totalForMessage > showingCount
+            ? `${showingCount} of ${totalForMessage}`
+            : `${showingCount}`;
+        messageText = `Showing cached jobs · ${countText} jobs`;
+      } else if (totalForMessage > showingCount) {
+        messageText = `Loaded ${showingCount} of ${totalForMessage} jobs`;
+      } else {
+        messageText = `Loaded ${showingCount} jobs`;
+      }
+
       setStatusMessage({
-        text: `Loaded ${data?.jobs?.length ?? 0} jobs`,
+        text: messageText,
         type: 'success',
       });
     } catch (error: any) {
@@ -131,9 +299,12 @@ export function Dashboard() {
       if (filters.toDate) params.to = filters.toDate;
 
       const data = await syncJobs(params);
-      setStatusMessage({ text: data?.message || 'Synced', type: 'success' });
-      // auto-refresh after sync
-      await loadJobs(1);
+      const syncedJobs = Array.isArray(data?.jobs) ? data.jobs : undefined;
+
+      await loadJobs(1, pagination.pageSize, {
+        preloadedJobs: syncedJobs,
+        statusPrefix: data?.message || 'Sync complete',
+      });
     } catch (error: any) {
       const errorMsg =
         error?.response?.data?.error || error?.message || 'Sync failed';
@@ -152,7 +323,7 @@ export function Dashboard() {
     setPredictionSummary(null);
 
     try {
-      // pass jobs via params (backend uses query params, not body)
+  // send currently loaded jobs in request body for prediction
       const response = await predict({ jobs });
       const preds: Prediction[] = response?.predictions ?? [];
 
@@ -311,7 +482,7 @@ export function Dashboard() {
               Jobs Dashboard
             </h1>
             <p className="text-sm text-slate-400 mt-0.5">
-              simPRO business data forecasting
+              SimPRO Business Data Forecasting
             </p>
           </div>
         </div>

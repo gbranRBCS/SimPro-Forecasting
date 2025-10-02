@@ -1,4 +1,4 @@
-import { AlertCircle, CheckCircle, Loader2, TrendingUp } from 'lucide-react';
+import { AlertCircle, CheckCircle, Loader2, TrendingUp } from '../../components/icons';
 
 interface StatusAlertProps {
   message: string;

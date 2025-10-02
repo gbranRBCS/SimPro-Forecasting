@@ -29,7 +29,13 @@ export async function getJobs(params: any) {
 }
 
 
-export async function predict(params: Record<string, any>) {
-  const res = await api.post("/data/predict", {}, { params });
+export async function predict(body: Record<string, any>) {
+  const payload: Record<string, any> = {};
+  Object.entries(body || {}).forEach(([key, value]) => {
+    if (value === undefined) return;
+    payload[key] = value;
+  });
+
+  const res = await api.post("/data/predict", payload);
   return res.data;
 }
