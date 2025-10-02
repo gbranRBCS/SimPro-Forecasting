@@ -27,22 +27,6 @@ export default function Dashboard() {
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
   const [totalPages, setTotalPages] = useState(1);
-  const [footerVisible, setFooterVisible] = useState(false);
-
-  useEffect(() => {
-    let lastY = 0;
-    function onScroll() {
-      const y = window.scrollY || window.pageYOffset;
-      // show footer when user has scrolled down a bit; hide near top
-      if (y > 50) setFooterVisible(true);
-      else setFooterVisible(false);
-      lastY = y;
-    }
-    window.addEventListener("scroll", onScroll, { passive: true });
-    // initialize
-    onScroll();
-    return () => window.removeEventListener("scroll", onScroll);
-  }, []);
 
   async function doSync() {
     setLoading(true);
@@ -176,7 +160,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen pb-24">
       {/* Pinned top toolbar: inputs + sync/load/predict */}
       <div className="sticky top-0 z-30 bg-white/95 backdrop-blur-sm border-b shadow-sm">
         <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap gap-3 items-center">
@@ -253,7 +237,7 @@ export default function Dashboard() {
       </div>
 
       {/* content area */}
-      <div className="max-w-6xl mx-auto px-4 pt-4 pb-6">
+      <div className="max-w-6xl mx-auto px-4 pt-4 pb-16">
         {msg && <div className="text-sm text-red-700">{msg}</div>}
 
         {/* Prediction */}
@@ -334,41 +318,45 @@ export default function Dashboard() {
           </table>
         </div>
         
-        {/* Pagination */}
-        <div className="mt-4 mb-8 flex flex-nowrap items-center gap-3">
+      </div>
+
+      {/* Sticky pagination footer */}
+      <div className="fixed bottom-0 left-0 right-0 z-40 border-t bg-white/95 backdrop-blur-sm shadow-lg">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-center gap-3 px-4 py-3">
           <button
-            className="px-3 py-1.5 border rounded bg-gray-800 text-white hover:bg-gray-700 disabled:opacity-50 whitespace-nowrap"
+            className="rounded border bg-gray-800 px-3 py-1.5 text-white hover:bg-gray-700 disabled:opacity-50"
             onClick={() => setPage((p) => Math.max(1, p - 1))}
             disabled={page <= 1}
           >
             Previous
           </button>
-          
-          <div className="whitespace-nowrap text-sm font-medium">
+
+          <div className="text-sm font-medium">
             Page {page} of {totalPages}
           </div>
-          
-          <div className="whitespace-nowrap">
-            Page size:
-          </div>
-          
-          <select
-            id="page-size"
-            className="border rounded px-2 py-1.5 w-20"
-            value={pageSize}
-            onChange={(e) => {
-              const newSize = Number(e.target.value);
-              setPageSize(newSize);
-              setPage(1); // Reset to first page when changing page size
-            }}
-          >
-            {[10, 20, 50, 100].map((size) => (
-              <option key={size} value={size}>{size}</option>
-            ))}
-          </select>
-          
+
+          <label className="flex items-center gap-2 text-sm">
+            <span>Page size:</span>
+            <select
+              id="page-size"
+              className="w-20 rounded border px-2 py-1.5"
+              value={pageSize}
+              onChange={(e) => {
+                const newSize = Number(e.target.value);
+                setPageSize(newSize);
+                setPage(1); // Reset to first page when changing page size
+              }}
+            >
+              {[10, 20, 50, 100].map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+
           <button
-            className="px-3 py-1.5 border rounded bg-gray-800 text-white hover:bg-gray-700 disabled:opacity-50 whitespace-nowrap"
+            className="rounded border bg-gray-800 px-3 py-1.5 text-white hover:bg-gray-700 disabled:opacity-50"
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page >= totalPages}
           >

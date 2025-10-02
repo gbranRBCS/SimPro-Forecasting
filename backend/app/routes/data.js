@@ -550,17 +550,30 @@ router.post("/predict", authRequired, async (req, res) => {
       : jobsToSend;
 
   try {
+    console.info(`[predict] forwarding ${jobsToSendLimited.length} jobs to ML at ${process.env.ML_URL}/predict`);
     const response = await axios.post(`${process.env.ML_URL}/predict`, {
       data: jobsToSendLimited,
     });
-    res.json(response.data);
+    return res.json(response.data);
   } catch (err) {
+    // log full diagnostic info
     console.error(
       "Error forwarding jobs to ML service:",
-      err.message,
-      err.response?.data,
+      axiosDiag(err),
+      "jobsCount:",
+      jobsToSendLimited.length
     );
-    res.status(500).json({ error: "ML Prediction failed" });
+
+    // prepare detailed error to help debugging (temporary)
+    const mlStatus = err.response?.status ?? null;
+    const mlBody = err.response?.data ?? { message: err.message };
+
+    // return useful detail to the frontend so it doesn't just show "Predict failed"
+    return res.status(502).json({
+      error: "ML Prediction failed",
+      mlStatus,
+      mlBody,
+    });
   }
 });
 
