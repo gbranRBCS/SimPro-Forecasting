@@ -38,13 +38,21 @@ export function toJobRowView(j: any) {
 // pretty print
 export function formatCurrency(v: number | null | undefined) {
   if (v == null) return "—";
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: "GBP" }).format(v);
+  try {
+    return new Intl.NumberFormat('en-AU', { style: "currency", currency: "GBP" }).format(v);
+  } catch (e) {
+    return "—";
+  }
 }
 
 export function formatDate(s: string | Date | null | undefined) {
   if (!s) return "—";
-  const d = new Date(s as any);
-  return isNaN(d as any) ? "—" : d.toLocaleDateString();
+  try {
+    const d = new Date(s as any);
+    return isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
+  } catch (e) {
+    return "—";
+  }
 }
 
 // colours/ icons
@@ -57,7 +65,7 @@ export function classBadgeProps(cls: string | null | undefined) {
     case "Low":
       return { tone: "destructive", label: "Low" } as const;
     default:
-      return { tone: "neutral", label: "—" } as const;
+      return { tone: "default", label: "—" } as const;
   }
 }
 
