@@ -18,11 +18,33 @@ export default function Login() {
   }
 
   return (
-    <form onSubmit={submit} className="p-6 space-y-3 max-w-sm">
-      <input className="border p-2 w-full" placeholder="username" value={u} onChange={e=>setU(e.target.value)} />
-      <input className="border p-2 w-full" placeholder="password" type="password" value={p} onChange={e=>setP(e.target.value)} />
-      {err && <div className="text-red-700 text-sm">{err}</div>}
-      <button className="px-3 py-2 bg-blue-600 text-white rounded w-full">Login</button>
+    <form
+      onSubmit={submit}
+      className="min-h-screen bg-slate-950 flex flex-col items-center justify-center px-6"
+    >
+      <div className="w-full max-w-sm space-y-4 bg-slate-900/70 border border-slate-800 rounded-xl shadow-lg p-8">
+        <div className="space-y-1 text-center">
+          <h1 className="text-2xl font-semibold text-slate-100">SimPRO Forecasting</h1>
+          <p className="text-sm text-slate-400">Please sign in to continue to your dashboard:</p>
+        </div>
+        <input
+          className="w-full rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          placeholder="username"
+          value={u}
+          onChange={e=>setU(e.target.value)}
+        />
+        <input
+          className="w-full rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          placeholder="password"
+          type="password"
+          value={p}
+          onChange={e=>setP(e.target.value)}
+        />
+        {err && <div className="rounded-lg border border-red-700/40 bg-red-900/20 px-3 py-2 text-sm text-red-300">{err}</div>}
+        <button className="w-full rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-slate-950">
+          Login
+        </button>
+      </div>
     </form>
   );
 }

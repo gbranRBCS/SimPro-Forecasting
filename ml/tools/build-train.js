@@ -13,6 +13,8 @@ const USER = arg('user');
 const PASS = arg('pass');
 const TOKEN = arg('token');
 const OUT  = arg('out', 'ml/train.json');
+const LOW = Number(arg('low', '0.44'));
+const HIGH = Number(arg('high', '0.64'));
 
 // date-range + limit arguments for historical data sync
 const FROM = arg('from', '2010-01-01');           // default start (very old)
@@ -27,9 +29,8 @@ function toNum(x) {
 
 function computeProfitClassFromMargin(p) {
   if (p == null) return null;
-  // match ml/app.py derive_label thresholds: High > 0.64, Medium >= 0.44, else Low
-  if (p > 0.64) return "High";
-  if (p >= 0.44) return "Medium";
+  if (p > HIGH) return "High";
+  if (p >= LOW) return "Medium";
   return "Low";
 }
 
@@ -73,6 +74,7 @@ function deriveRow(j) {
     lead_time_days: j.lead_time_days ?? null,
     is_overdue: j.is_overdue ?? 0,
     descriptionText: j.descriptionText ?? "",
+    dateIssued: j.dateIssued ?? null,
     ...(netMarginPct != null ? { netMarginPct } : {}),
     ...(profitability_class ? { profitability_class } : {})
   };
@@ -111,7 +113,8 @@ async function main() {
     data: rows,
     test_size: 0.2,
     random_state: 42,
-    max_tfidf_features: 500
+    max_tfidf_features: 500,
+    thresholds: { low: LOW, high: HIGH }
   };
 
   fs.mkdirSync(path.dirname(OUT), { recursive: true });

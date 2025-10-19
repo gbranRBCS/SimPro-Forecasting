@@ -3,14 +3,14 @@ import express from "express";
 import dataRouter from "./data.js";
 import jwt from "jsonwebtoken";
 
-// Mock environment variables
+// mock environment variables
 process.env.JWT_SECRET = "testsecret";
 process.env.SIMPRO_API_URL = "http://mock-simpro";
 process.env.SIMPRO_API_TOKEN = "mocktoken";
 process.env.ML_URL = "http://mock-ml";
 process.env.SYNC_INTERVAL_MINUTES = "1"; // 1 minute for testing
 
-// Mock axios
+// mock axios
 import axios from "axios";
 jest.mock("axios");
 

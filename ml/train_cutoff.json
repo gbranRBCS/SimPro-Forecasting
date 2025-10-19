@@ -957,5 +957,9 @@
   "thresholds": {
     "low": 0.44,
     "high": 0.64
-  }
+  },
+  "cutoff_date": "2016-10-17",
+  "use_text": false,
+  "calibrate": true,
+  "rare_top_k": 20
 }

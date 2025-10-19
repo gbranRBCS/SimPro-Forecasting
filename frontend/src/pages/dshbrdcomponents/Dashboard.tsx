@@ -324,7 +324,23 @@ export function Dashboard() {
 
     try {
   // send currently loaded jobs in request body for prediction
-      const response = await predict({ jobs });
+      const seenIds = new Set<string>();
+      const jobIds = jobs
+        .map((job) => {
+          const id = job?.ID ?? job?.id ?? null;
+          if (id === null || id === undefined) return null;
+          const key = String(id);
+          if (seenIds.has(key)) return null;
+          seenIds.add(key);
+          return id;
+        })
+        .filter((id): id is string | number => id !== null);
+
+      if (jobIds.length === 0) {
+        throw new Error('No job identifiers available to request predictions');
+      }
+
+      const response = await predict({ jobIds });
       const preds: Prediction[] = response?.predictions ?? [];
 
       // map predictions back to jobs using uppercase ID field
