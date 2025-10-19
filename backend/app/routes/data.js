@@ -179,17 +179,18 @@ export async function fetchSimPROJobs(params = {}) {
 
   const pageDelayMs = parseInt(process.env.SIMPRO_PAGE_DELAY_MS || "0", 10) || 0;
   const pageJitterMs = parseInt(process.env.SIMPRO_PAGE_JITTER_MS || "0", 10) || 0;
-
-  // LIMIT FOR TESTING: stop after fetching up to determined maximum
-  const MAX_SYNC_JOBS = 200;
+  const maxSyncDefaultRaw = parseInt(process.env.SIMPRO_FETCH_MAX || "300", 10);
+  const maxSyncDefault =
+    Number.isFinite(maxSyncDefaultRaw) && maxSyncDefaultRaw > 0 ? maxSyncDefaultRaw : null;
 
   const allJobs = [];
 
   // if historical window is requested, fetch from the oldest pages first.
   const historicalWindow = !!(params?.DateIssuedFrom || params?.DateIssuedTo);
+  const maxJobs = maxSyncDefault;
 
   if (historicalWindow) {
-    // First request to read total pages from headers
+    // first request to read total pages from headers
     const headResp = await withRetries(
       () =>
         axios.get(url, {
@@ -221,8 +222,8 @@ export async function fetchSimPROJobs(params = {}) {
 
       allJobs.push(...jobs);
 
-      if (allJobs.length >= MAX_SYNC_JOBS) {
-        allJobs.length = MAX_SYNC_JOBS;
+      if (maxJobs && allJobs.length >= maxJobs) {
+        allJobs.length = maxJobs;
         break;
       }
 
@@ -257,8 +258,8 @@ export async function fetchSimPROJobs(params = {}) {
 
     allJobs.push(...jobs);
 
-    if (allJobs.length >= MAX_SYNC_JOBS) {
-      allJobs.length = MAX_SYNC_JOBS;
+    if (maxJobs && allJobs.length >= maxJobs) {
+      allJobs.length = maxJobs;
       break;
     }
 
@@ -464,7 +465,7 @@ router.get("/sync", authRequired, async (req, res) => {
   if (DateIssued) params.DateIssued = DateIssued;
   if (DateIssuedFrom) params.DateIssuedFrom = DateIssuedFrom;
   if (DateIssuedTo) params.DateIssuedTo = DateIssuedTo;
-
+  const isHistoricalRange = Boolean(DateIssuedFrom || DateIssuedTo);
 
   const concurrency = Number.parseInt(
     process.env.ENRICH_CONCURRENCY || "5",
@@ -476,16 +477,19 @@ router.get("/sync", authRequired, async (req, res) => {
     const list = await fetchSimPROJobs(params);
 
     // enrich every job, but stop once enough enriched jobs are collected
-    const KEEP_MAX = Number.parseInt(process.env.SIMPRO_SYNC_MAX || "100", 10);
+    const keepMaxRaw = Number.parseInt(process.env.SIMPRO_SYNC_MAX || "300", 10);
+    const keepMaxConfigured =
+      Number.isFinite(keepMaxRaw) && keepMaxRaw > 0 ? keepMaxRaw : null;
+    const KEEP_MAX = keepMaxConfigured;
     const idsAll = Array.isArray(list) ? list.map((j) => j.ID).filter(Boolean) : [];
     const byIdBase = new Map(Array.isArray(list) ? list.map((j) => [j.ID, j]) : []);
 
     const kept = [];
-    for (let i = 0; i < idsAll.length && kept.length < KEEP_MAX; i += concurrency) {
+    for (let i = 0; i < idsAll.length && (!KEEP_MAX || kept.length < KEEP_MAX); i += concurrency) {
       const slice = idsAll.slice(i, i + concurrency);
       // fetch details for this chunk (with retries inside fetchJobDetail)
       const settled = await Promise.allSettled(slice.map((id) => fetchJobDetail(id)));
-      for (let s = 0; s < settled.length && kept.length < KEEP_MAX; s++) {
+      for (let s = 0; s < settled.length && (!KEEP_MAX || kept.length < KEEP_MAX); s++) {
         const id = slice[s];
         const base = byIdBase.get(id) || {};
         const detail = settled[s].status === "fulfilled" ? settled[s].value : {};
@@ -499,7 +503,7 @@ router.get("/sync", authRequired, async (req, res) => {
       if (requestGapMs > 0) await sleep(requestGapMs);
     }
 
-    const excludedCount = Array.isArray(list) ? list.length - kept.length : 0;
+  const excludedCount = Array.isArray(list) ? list.length - kept.length : 0;
     if (excludedCount > 0) {
       console.info(`Sync: excluded ${excludedCount} jobs without netMarginPct/profitability_class (kept ${kept.length})`);
     }

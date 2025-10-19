@@ -190,7 +190,6 @@ CLASS_LABELS = ["Low","Medium","High"]
 
 DEFAULT_THRESHOLDS = {"low": 0.44, "high": 0.64}
 
-
 def resolve_thresholds(thresholds: Optional[Dict[str, Any]]) -> Dict[str, float]:
     resolved = DEFAULT_THRESHOLDS.copy()
     if thresholds:
@@ -201,18 +200,6 @@ def resolve_thresholds(thresholds: Optional[Dict[str, Any]]) -> Dict[str, float]
         if high is not None:
             resolved["high"] = float(high)
     return resolved
-
-
-def build_calibrated_classifier(base, *, method: str = "sigmoid", cv: int = 3) -> CalibratedClassifierCV:
-    """Wrap CalibratedClassifierCV to support estimator/base_estimator keyword across sklearn versions."""
-    params = inspect.signature(CalibratedClassifierCV.__init__).parameters
-    kwargs = {"method": method, "cv": cv}
-    if "estimator" in params:
-        kwargs["estimator"] = base
-    else:
-        kwargs["base_estimator"] = base
-    return CalibratedClassifierCV(**kwargs)
-
 
 def derive_label(row: Dict[str, Any], thresholds: Dict[str, float]) -> Optional[str]:
     """Create a 3-class profitability label using provided thresholds."""
@@ -231,6 +218,16 @@ def derive_label(row: Dict[str, Any], thresholds: Dict[str, float]) -> Optional[
     if p >= low:
         return "Medium"
     return "Low"
+
+def build_calibrated_classifier(base, *, method: str = "sigmoid", cv: int = 3) -> CalibratedClassifierCV:
+    """Wrap CalibratedClassifierCV to support estimator/base_estimator keyword across sklearn versions."""
+    params = inspect.signature(CalibratedClassifierCV.__init__).parameters
+    kwargs = {"method": method, "cv": cv}
+    if "estimator" in params:
+        kwargs["estimator"] = base
+    else:
+        kwargs["base_estimator"] = base
+    return CalibratedClassifierCV(**kwargs)
 
 
 def build_dataframe(
@@ -346,7 +343,7 @@ def build_pipeline(
     lr = LogisticRegression(
         max_iter=1000,
         class_weight="balanced",
-        multi_class="auto",
+        multinomial="auto",
         C=C,
     )
     pipe = Pipeline(
@@ -437,10 +434,8 @@ def train(payload: TrainRequest = Body(...)):
             return {"ok": False, "error": f"Invalid cutoff_date '{cutoff_date}'."}
         train_mask = (date_series < cutoff_ts) | date_series.isna()
         test_mask = date_series >= cutoff_ts
-        X_train = X.loc[train_mask]
-        y_train = y.loc[train_mask]
-        X_test = X.loc[test_mask]
-        y_test = y.loc[test_mask]
+        X_train, y_train = X.loc[train_mask], y.loc[train_mask]
+        X_test, y_test = X.loc[test_mask], y.loc[test_mask]
         if len(X_train) == 0 or len(X_test) == 0:
             return {
                 "ok": False,
@@ -479,8 +474,7 @@ def train(payload: TrainRequest = Body(...)):
         cv_scores[str(c)] = scores_list
         mean_score = float(np.mean(scores))
         if mean_score > best_score:
-            best_score = mean_score
-            best_c = c
+            best_score, best_c = mean_score, c
 
     base_model = build_pipeline(
         max_tfidf_features=max_tfidf,

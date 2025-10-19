@@ -17,9 +17,9 @@ const LOW = Number(arg('low', '0.44'));
 const HIGH = Number(arg('high', '0.64'));
 
 // date-range + limit arguments for historical data sync
-const FROM = arg('from', '2010-01-01');           // default start (very old)
+const FROM = arg('from', '2015-01-01');           // default start (very old)
 const TO   = arg('to', '2024-03-31');             // default end: end of 2024 Q1
-const LIMIT = Number(arg('limit', '50'));         // how many jobs to read after syncing
+const LIMIT = Number(arg('limit', '300'));         // how many jobs to read after syncing
 
 function toNum(x) {
   if (x === null || x === undefined) return null;

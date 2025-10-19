@@ -41,3 +41,7 @@ __pycache__/
 *.db
 *.sqlite
 *.sqlite3
+
+#sensitive train data
+./ml/train.json
+./ml/train_cutoff.json
