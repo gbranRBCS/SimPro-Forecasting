@@ -22,4 +22,12 @@ db.exec(`
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+    CREATE TABLE IF NOT EXISTS jobs (
+        job_id TEXT PRIMARY KEY,
+        updated_at TEXT,
+        issued_date TEXT,
+        completed_date TEXT,
+        payload TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_jobs_updated_at ON jobs(updated_at DESC);
 `);

@@ -288,15 +288,19 @@ export function Dashboard() {
     }
   };
 
-  const handleSync = async () => {
+  const handleSync = async (mode: 'update' | 'full' = 'update') => {
     setIsSyncing(true);
     setStatusMessage(null);
     setPredictionSummary(null);
 
     try {
-      const params: { from?: string; to?: string } = {};
-      if (filters.fromDate) params.from = filters.fromDate;
-      if (filters.toDate) params.to = filters.toDate;
+      const params: { from?: string; to?: string; mode: 'update' | 'full' } = {
+        mode,
+      };
+      if (mode === 'update') {
+        if (filters.fromDate) params.from = filters.fromDate;
+        if (filters.toDate) params.to = filters.toDate;
+      }
 
       const data = await syncJobs(params);
       const syncedJobs = Array.isArray(data?.jobs) ? data.jobs : undefined;

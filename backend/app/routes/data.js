@@ -2,6 +2,8 @@ import express from "express";
 import axios from "axios";
 import jwt from "jsonwebtoken";
 
+import { clearJobs, getLatestIssuedDate, loadJobs, upsertJobs } from "../db/jobs.js";
+
 const router = express.Router();
 
 function axiosDiag(err) {
@@ -15,12 +17,9 @@ function axiosDiag(err) {
   };
 }
 
-// Store sync state
-let lastSyncTime = null;
-const syncInterval = parseInt(process.env.SYNC_INTERVAL_MINUTES, 10) || 60;
-
 // Cache current job data
-let cachedJobs = [];
+let cachedJobs = loadJobs();
+let lastSyncTime = cachedJobs.length ? Date.now() : null;
 let syncing = false;
 
 // JWT Authentication
@@ -87,6 +86,72 @@ const throttlePenaltyMs = Math.max(
 );
 let simproQueue = Promise.resolve();
 let nextAllowedRequestAt = 0;
+
+const HISTORY_START = new Date("2025-01-01T00:00:00Z");
+const LOOKBACK_HOURS = Math.max(
+  0,
+  parseInt(process.env.SIMPRO_SYNC_LOOKBACK_HOURS || "24", 10) || 24,
+);
+
+function toDate(value) {
+  if (!value) return null;
+  const d = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (!Number.isFinite(+d)) return null;
+  return d;
+}
+
+function toIsoString(value) {
+  const d = toDate(value);
+  return d ? d.toISOString() : null;
+}
+
+function toIsoDate(value) {
+  const d = toDate(value);
+  if (!d) return null;
+  const year = d.getUTCFullYear();
+  const month = `${d.getUTCMonth() + 1}`.padStart(2, "0");
+  const day = `${d.getUTCDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function computeIssuedFromOverride() {
+  const latestIssued = getLatestIssuedDate();
+  const latestDate = toDate(latestIssued);
+  const lookbackMs = LOOKBACK_HOURS * 60 * 60 * 1000;
+  if (!latestDate) {
+    return toIsoDate(HISTORY_START);
+  }
+
+  const lowerBound = HISTORY_START.getTime();
+  const from = new Date(latestDate.getTime() - lookbackMs);
+  const clamped = new Date(Math.max(lowerBound, from.getTime()));
+  return toIsoDate(clamped);
+}
+
+function buildJobRow(job) {
+  if (!job) return null;
+  const jobId = job?.ID ?? job?.Id ?? job?.id;
+  if (jobId == null) return null;
+
+  const issuedCandidate = job?.dateIssued ?? job?.DateIssued ?? null;
+  const completedCandidate = job?.completed_date ?? job?.CompletedDate ?? job?.DateCompleted;
+  const updatedCandidate =
+    job?.DateUpdated ??
+    job?.UpdatedDate ??
+    job?.LastUpdated ??
+    job?.updated_at ??
+    job?.Updated ??
+    completedCandidate ??
+    issuedCandidate;
+
+  return {
+    job_id: String(jobId),
+    issued_date: toIsoDate(issuedCandidate),
+    completed_date: toIsoString(completedCandidate),
+    updated_at: toIsoString(updatedCandidate),
+    payload: JSON.stringify(job),
+  };
+}
 
 function scheduleSimproRequest(makeRequest, label = "simpro") {
   const run = simproQueue.then(async () => {
@@ -170,7 +235,7 @@ function buildJobsUrl() {
 }
 
 // simPRO fetch
-export async function fetchSimPROJobs(params = {}) {
+export async function fetchSimPROJobs(params = {}, { historical = false } = {}) {
   const url = buildJobsUrl();
   const token = await getSimproToken();
 
@@ -185,8 +250,11 @@ export async function fetchSimPROJobs(params = {}) {
 
   const allJobs = [];
 
+  // Clone params so callers can safely reuse their objects across invocations.
+  const queryParams = { ...params };
+
   // if historical window is requested, fetch from the oldest pages first.
-  const historicalWindow = !!(params?.DateIssuedFrom || params?.DateIssuedTo);
+  const historicalWindow = Boolean(historical);
   const maxJobs = maxSyncDefault;
 
   if (historicalWindow) {
@@ -195,7 +263,7 @@ export async function fetchSimPROJobs(params = {}) {
       () =>
         axios.get(url, {
           headers: { Authorization: `Bearer ${token}` },
-          params: { ...params, page: 1, pageSize },
+          params: { ...queryParams, page: 1, pageSize },
           timeout: 20_000,
         }),
       { maxRetries: 5, baseDelay: 1000 }
@@ -206,7 +274,7 @@ export async function fetchSimPROJobs(params = {}) {
 
     let page = totalPages;
     for (;;) {
-      const pageParams = { ...params, page, pageSize };
+      const pageParams = { ...queryParams, page, pageSize };
       const resp = await withRetries(
         () =>
           axios.get(url, {
@@ -242,7 +310,7 @@ export async function fetchSimPROJobs(params = {}) {
   // default - newest-first forward paging 
   let page = 1;
   for (;;) {
-    const pageParams = { ...params, page, pageSize };
+    const pageParams = { ...queryParams, page, pageSize };
     const resp = await withRetries(
       () =>
         axios.get(url, {
@@ -450,22 +518,35 @@ router.get("/sync", authRequired, async (req, res) => {
   if (syncing)
     return res.status(409).json({ message: "Sync already in progress" });
 
-  const now = Date.now();
-  if (
-    !req.query.force &&
-    lastSyncTime &&
-    now - lastSyncTime < syncInterval * 60 * 1000 &&
-    cachedJobs.length
-  ) {
-    return res.json({ message: "Already recently synced", jobs: cachedJobs });
-  }
+  const {
+    DateIssued,
+    DateIssuedFrom,
+    DateIssuedTo,
+    mode: syncModeRaw,
+    syncMode: syncModeAlias,
+  } = req.query;
 
-  const { DateIssued, DateIssuedFrom, DateIssuedTo } = req.query;
+  const requestedMode = (syncModeRaw || syncModeAlias || "").toString().toLowerCase();
+  const syncMode = requestedMode === "full" ? "full" : "update";
+
   const params = {};
-  if (DateIssued) params.DateIssued = DateIssued;
-  if (DateIssuedFrom) params.DateIssuedFrom = DateIssuedFrom;
-  if (DateIssuedTo) params.DateIssuedTo = DateIssuedTo;
-  const isHistoricalRange = Boolean(DateIssuedFrom || DateIssuedTo);
+  let historicalRange = false;
+  let incrementalFrom = null;
+
+  if (syncMode === "full") {
+    params.DateIssuedFrom = toIsoDate(HISTORY_START);
+    historicalRange = true;
+  } else {
+    if (DateIssued) params.DateIssued = DateIssued;
+    if (DateIssuedFrom) params.DateIssuedFrom = DateIssuedFrom;
+    if (DateIssuedTo) params.DateIssuedTo = DateIssuedTo;
+    historicalRange = Boolean(DateIssuedFrom || DateIssuedTo);
+
+    if (!historicalRange && !DateIssued) {
+      incrementalFrom = computeIssuedFromOverride();
+      params.DateIssuedFrom = incrementalFrom;
+    }
+  }
 
   const concurrency = Number.parseInt(
     process.env.ENRICH_CONCURRENCY || "5",
@@ -474,18 +555,45 @@ router.get("/sync", authRequired, async (req, res) => {
 
   syncing = true;
   try {
-    const list = await fetchSimPROJobs(params);
+    const listRaw = await fetchSimPROJobs(params, { historical: historicalRange });
+
+    const earliestAllowedMs = HISTORY_START.getTime();
+    const incrementalFromDate =
+      incrementalFrom != null ? toDate(`${incrementalFrom}T00:00:00Z`) : null;
+
+    const list = Array.isArray(listRaw)
+      ? listRaw.filter((job) => {
+          const issuedCandidate =
+            job?.DateIssued ??
+            job?.dateIssued ??
+            job?.IssuedDate ??
+            job?.issued_date ??
+            job?.date_issued ??
+            null;
+          const issuedDate = toDate(issuedCandidate);
+          if (!issuedDate) return false;
+          const issuedMs = issuedDate.getTime();
+          if (issuedMs < earliestAllowedMs) return false;
+          if (incrementalFromDate && issuedMs < incrementalFromDate.getTime())
+            return false;
+          return true;
+        })
+      : [];
 
     // enrich every job, but stop once enough enriched jobs are collected
     const keepMaxRaw = Number.parseInt(process.env.SIMPRO_SYNC_MAX || "300", 10);
     const keepMaxConfigured =
       Number.isFinite(keepMaxRaw) && keepMaxRaw > 0 ? keepMaxRaw : null;
     const KEEP_MAX = keepMaxConfigured;
-    const idsAll = Array.isArray(list) ? list.map((j) => j.ID).filter(Boolean) : [];
-    const byIdBase = new Map(Array.isArray(list) ? list.map((j) => [j.ID, j]) : []);
+    const idsAll = list.map((j) => j.ID).filter(Boolean);
+    const byIdBase = new Map(list.map((j) => [j.ID, j]));
 
     const kept = [];
-    for (let i = 0; i < idsAll.length && (!KEEP_MAX || kept.length < KEEP_MAX); i += concurrency) {
+    for (
+      let i = 0;
+      i < idsAll.length && (!KEEP_MAX || kept.length < KEEP_MAX);
+      i += concurrency
+    ) {
       const slice = idsAll.slice(i, i + concurrency);
       // fetch details for this chunk (with retries inside fetchJobDetail)
       const settled = await Promise.allSettled(slice.map((id) => fetchJobDetail(id)));
@@ -503,18 +611,33 @@ router.get("/sync", authRequired, async (req, res) => {
       if (requestGapMs > 0) await sleep(requestGapMs);
     }
 
-  const excludedCount = Array.isArray(list) ? list.length - kept.length : 0;
+    const excludedCount = list.length - kept.length;
     if (excludedCount > 0) {
-      console.info(`Sync: excluded ${excludedCount} jobs without netMarginPct/profitability_class (kept ${kept.length})`);
+      console.info(
+        `Sync: excluded ${excludedCount} jobs without netMarginPct/profitability_class (kept ${kept.length})`,
+      );
     }
 
-    cachedJobs = kept;
-     lastSyncTime = now;
+    const rows = kept
+      .map((job) => buildJobRow(job))
+      .filter(Boolean);
+
+    if (syncMode === "full") {
+      clearJobs();
+    }
+
+    if (rows.length) upsertJobs(rows);
+
+    cachedJobs = loadJobs();
+    lastSyncTime = Date.now();
 
     res.json({
-      message: "Sync + enrich successful",
+      message: syncMode === "full" ? "Full sync complete" : "Update sync complete",
       count: cachedJobs.length,
       excluded: excludedCount,
+      upserted: rows.length,
+      params,
+      mode: syncMode,
       jobs: cachedJobs,
     });
   } catch (err) {
@@ -544,6 +667,11 @@ router.get("/jobs", authRequired, (req, res) => {
     totalPages: Math.ceil(jobs.length / pageSize),
   });
 });
+
+export function refreshCachedJobsFromDb() {
+  cachedJobs = loadJobs();
+  return cachedJobs;
+}
 
 router.post("/predict", authRequired, async (req, res) => {
   const bodyJobs = Array.isArray(req.body?.jobs) ? req.body.jobs : null;

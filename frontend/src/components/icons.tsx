@@ -79,6 +79,11 @@ export const ChevronRight = createIcon(
   "ChevronRightIcon",
 );
 
+export const ChevronDown = createIcon(
+  <path d="m6 9 6 6 6-6" />,
+  "ChevronDownIcon",
+);
+
 export const AlertCircle = createIcon(
   <>
     <circle cx="12" cy="12" r="10" />
