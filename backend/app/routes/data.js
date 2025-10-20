@@ -2,6 +2,8 @@ import express from "express";
 import axios from "axios";
 import jwt from "jsonwebtoken";
 
+import { getLatestIssuedDate, loadJobs, upsertJobs } from "../db/jobs.js";
+
 const router = express.Router();
 
 function axiosDiag(err) {
@@ -15,12 +17,9 @@ function axiosDiag(err) {
   };
 }
 
-// Store sync state
-let lastSyncTime = null;
-const syncInterval = parseInt(process.env.SYNC_INTERVAL_MINUTES, 10) || 60;
-
 // Cache current job data
-let cachedJobs = [];
+let cachedJobs = loadJobs();
+let lastSyncTime = cachedJobs.length ? Date.now() : null;
 let syncing = false;
 
 // JWT Authentication
@@ -87,6 +86,72 @@ const throttlePenaltyMs = Math.max(
 );
 let simproQueue = Promise.resolve();
 let nextAllowedRequestAt = 0;
+
+const HISTORY_START = new Date("2025-01-01T00:00:00Z");
+const LOOKBACK_HOURS = Math.max(
+  0,
+  parseInt(process.env.SIMPRO_SYNC_LOOKBACK_HOURS || "24", 10) || 24,
+);
+
+function toDate(value) {
+  if (!value) return null;
+  const d = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  if (!Number.isFinite(+d)) return null;
+  return d;
+}
+
+function toIsoString(value) {
+  const d = toDate(value);
+  return d ? d.toISOString() : null;
+}
+
+function toIsoDate(value) {
+  const d = toDate(value);
+  if (!d) return null;
+  const year = d.getUTCFullYear();
+  const month = `${d.getUTCMonth() + 1}`.padStart(2, "0");
+  const day = `${d.getUTCDate()}`.padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function computeIssuedFromOverride() {
+  const latestIssued = getLatestIssuedDate();
+  const latestDate = toDate(latestIssued);
+  const lookbackMs = LOOKBACK_HOURS * 60 * 60 * 1000;
+  if (!latestDate) {
+    return toIsoDate(HISTORY_START);
+  }
+
+  const lowerBound = HISTORY_START.getTime();
+  const from = new Date(latestDate.getTime() - lookbackMs);
+  const clamped = new Date(Math.max(lowerBound, from.getTime()));
+  return toIsoDate(clamped);
+}
+
+function buildJobRow(job) {
+  if (!job) return null;
+  const jobId = job?.ID ?? job?.Id ?? job?.id;
+  if (jobId == null) return null;
+
+  const issuedCandidate = job?.dateIssued ?? job?.DateIssued ?? null;
+  const completedCandidate = job?.completed_date ?? job?.CompletedDate ?? job?.DateCompleted;
+  const updatedCandidate =
+    job?.DateUpdated ??
+    job?.UpdatedDate ??
+    job?.LastUpdated ??
+    job?.updated_at ??
+    job?.Updated ??
+    completedCandidate ??
+    issuedCandidate;
+
+  return {
+    job_id: String(jobId),
+    issued_date: toIsoDate(issuedCandidate),
+    completed_date: toIsoString(completedCandidate),
+    updated_at: toIsoString(updatedCandidate),
+    payload: JSON.stringify(job),
+  };
+}
 
 function scheduleSimproRequest(makeRequest, label = "simpro") {
   const run = simproQueue.then(async () => {
@@ -450,22 +515,16 @@ router.get("/sync", authRequired, async (req, res) => {
   if (syncing)
     return res.status(409).json({ message: "Sync already in progress" });
 
-  const now = Date.now();
-  if (
-    !req.query.force &&
-    lastSyncTime &&
-    now - lastSyncTime < syncInterval * 60 * 1000 &&
-    cachedJobs.length
-  ) {
-    return res.json({ message: "Already recently synced", jobs: cachedJobs });
-  }
-
   const { DateIssued, DateIssuedFrom, DateIssuedTo } = req.query;
   const params = {};
   if (DateIssued) params.DateIssued = DateIssued;
   if (DateIssuedFrom) params.DateIssuedFrom = DateIssuedFrom;
   if (DateIssuedTo) params.DateIssuedTo = DateIssuedTo;
   const isHistoricalRange = Boolean(DateIssuedFrom || DateIssuedTo);
+
+  if (!isHistoricalRange && !DateIssued) {
+    params.DateIssuedFrom = computeIssuedFromOverride();
+  }
 
   const concurrency = Number.parseInt(
     process.env.ENRICH_CONCURRENCY || "5",
@@ -508,13 +567,21 @@ router.get("/sync", authRequired, async (req, res) => {
       console.info(`Sync: excluded ${excludedCount} jobs without netMarginPct/profitability_class (kept ${kept.length})`);
     }
 
-    cachedJobs = kept;
-     lastSyncTime = now;
+    const rows = kept
+      .map((job) => buildJobRow(job))
+      .filter(Boolean);
+
+    if (rows.length) upsertJobs(rows);
+
+    cachedJobs = loadJobs();
+    lastSyncTime = Date.now();
 
     res.json({
       message: "Sync + enrich successful",
       count: cachedJobs.length,
       excluded: excludedCount,
+      upserted: rows.length,
+      params,
       jobs: cachedJobs,
     });
   } catch (err) {
@@ -544,6 +611,11 @@ router.get("/jobs", authRequired, (req, res) => {
     totalPages: Math.ceil(jobs.length / pageSize),
   });
 });
+
+export function refreshCachedJobsFromDb() {
+  cachedJobs = loadJobs();
+  return cachedJobs;
+}
 
 router.post("/predict", authRequired, async (req, res) => {
   const bodyJobs = Array.isArray(req.body?.jobs) ? req.body.jobs : null;
