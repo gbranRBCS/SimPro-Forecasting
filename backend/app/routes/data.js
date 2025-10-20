@@ -548,6 +548,10 @@ router.get("/sync", authRequired, async (req, res) => {
     }
   }
 
+  if (!isHistoricalRange && !DateIssued) {
+    params.DateIssuedFrom = computeIssuedFromOverride();
+  }
+
   const concurrency = Number.parseInt(
     process.env.ENRICH_CONCURRENCY || "5",
     10,
