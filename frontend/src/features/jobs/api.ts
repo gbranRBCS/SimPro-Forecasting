@@ -13,11 +13,17 @@ export type Prediction = {
   margin_est?: number | null;
 };
 
-export async function syncJobs(params: { from?: string; to?: string; force?: boolean }) {
+export async function syncJobs(params: {
+  from?: string;
+  to?: string;
+  force?: boolean;
+  mode?: "update" | "full";
+}) {
   const q: Record<string, any> = {};
   if (params?.from) q.DateIssuedFrom = params.from;
   if (params?.to) q.DateIssuedTo = params.to;
   if (params?.force) q.force = "1";
+  if (params?.mode) q.mode = params.mode;
   const r = await api.get("/data/sync", { params: q });
   return r.data;
 }

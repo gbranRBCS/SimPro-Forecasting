@@ -1,4 +1,5 @@
-import { Filter, RefreshCw, Sparkles } from '../../components/icons';
+import React, { useEffect, useRef, useState } from 'react';
+import { Filter, RefreshCw, Sparkles, ChevronDown } from '../../components/icons';
 
 interface FilterState {
   fromDate: string;
@@ -12,7 +13,7 @@ interface FilterState {
 interface ToolbarProps {
   filters: FilterState;
   onFilterChange: (filters: FilterState) => void;
-  onSync: () => void;
+  onSync: (mode: 'update' | 'full') => void;
   onLoadJobs: () => void;
   onPredict: () => void;
   isSyncing: boolean;
@@ -29,6 +30,37 @@ export function Toolbar({
   isLoading,
 }: ToolbarProps) {
   const isDisabled = isSyncing || isLoading;
+  const [syncMenuOpen, setSyncMenuOpen] = useState(false);
+  const syncControlRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!syncMenuOpen) return;
+
+    function handleClickOutside(event: MouseEvent) {
+      if (!syncControlRef.current) return;
+      if (!syncControlRef.current.contains(event.target as Node)) {
+        setSyncMenuOpen(false);
+      }
+    }
+
+    function handleKey(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setSyncMenuOpen(false);
+      }
+    }
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKey);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKey);
+    };
+  }, [syncMenuOpen]);
+
+  const triggerSync = (mode: 'update' | 'full') => {
+    setSyncMenuOpen(false);
+    onSync(mode);
+  };
 
   const handleChange = (field: keyof FilterState) => (
     e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>
@@ -136,23 +168,55 @@ export function Toolbar({
         </div>
 
         <div className="flex flex-wrap gap-3">
-          <button
-            onClick={onSync}
-            disabled={isDisabled}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          <div
+            ref={syncControlRef}
+            className="relative inline-flex rounded-lg shadow-sm"
           >
-            {isSyncing ? (
-              <>
-                <RefreshCw className="w-4 h-4 animate-spin" />
-                Syncing...
-              </>
-            ) : (
-              <>
-                <RefreshCw className="w-4 h-4" />
-                Sync
-              </>
+            <button
+              onClick={() => triggerSync('update')}
+              disabled={isDisabled}
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium rounded-l-lg focus:outline-none focus:ring-2 focus:ring-blue-600/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              {isSyncing ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                  Syncing...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-4 h-4" />
+                  Sync
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSyncMenuOpen((open) => !open)}
+              disabled={isDisabled}
+              aria-label="Open sync menu"
+              className="inline-flex items-center justify-center px-2 bg-blue-600 hover:bg-blue-500 text-white rounded-r-lg border-l border-blue-500/60 focus:outline-none focus:ring-2 focus:ring-blue-600/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+            >
+              <ChevronDown className="w-4 h-4" />
+            </button>
+            {syncMenuOpen && !isDisabled && (
+              <div className="absolute right-0 top-full mt-2 w-44 rounded-md bg-slate-800 border border-slate-700 shadow-lg ring-1 ring-black/5 focus:outline-none">
+                <button
+                  type="button"
+                  onClick={() => triggerSync('update')}
+                  className="w-full px-4 py-2 text-left text-sm text-slate-100 hover:bg-slate-700 transition-colors"
+                >
+                  Update sync (recent jobs)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => triggerSync('full')}
+                  className="w-full px-4 py-2 text-left text-sm text-slate-100 hover:bg-slate-700 transition-colors rounded-b-md"
+                >
+                  Full sync (replace all)
+                </button>
+              </div>
             )}
-          </button>
+          </div>
 
           <button
             onClick={onLoadJobs}

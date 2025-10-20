@@ -220,6 +220,99 @@ describe("Data Routes", () => {
     expect(detailRequests).not.toContain("legacy");
   });
 
+  test("/sync full mode replaces stored jobs with 2025-onward data", async () => {
+    const initialBatch = [
+      {
+        ID: "alpha",
+        id: "alpha",
+        Total: { IncTax: 150 },
+        DateIssued: "2025-01-02T10:00:00Z",
+        DateUpdated: "2025-01-03T00:00:00Z",
+        Description: "Alpha job",
+      },
+      {
+        ID: "beta",
+        id: "beta",
+        Total: { IncTax: 175 },
+        DateIssued: "2025-01-03T09:00:00Z",
+        DateUpdated: "2025-01-04T00:00:00Z",
+        Description: "Beta job",
+      },
+    ];
+
+    const fullBatch = [
+      {
+        ID: "gamma",
+        id: "gamma",
+        Total: { IncTax: 220 },
+        DateIssued: "2025-02-10T09:00:00Z",
+        DateUpdated: "2025-02-11T00:00:00Z",
+        Description: "Gamma job",
+      },
+      {
+        ID: "legacy",
+        id: "legacy",
+        Total: { IncTax: 80 },
+        DateIssued: "2024-12-31T12:00:00Z",
+        DateUpdated: "2025-01-01T00:00:00Z",
+        Description: "Legacy job",
+      },
+    ];
+
+    const detailById = new Map(
+      [...initialBatch, ...fullBatch].map((job) => [String(job.ID), job]),
+    );
+
+    let currentBatch = initialBatch;
+    const listCalls = [];
+
+    getSpy.mockImplementation((url, config = {}) => {
+      if (url.includes("/jobs/") && !config?.params) {
+        const id = url.split("/").filter(Boolean).pop();
+        return Promise.resolve({ data: detailById.get(id) || {} });
+      }
+
+      listCalls.push({
+        from: config?.params?.DateIssuedFrom,
+        page: config?.params?.page,
+      });
+
+      return Promise.resolve({ data: currentBatch, headers: { "result-pages": "1" } });
+    });
+
+    const res1 = await request(app)
+      .get("/data/sync")
+      .set("Authorization", `Bearer ${getToken()}`);
+
+    expect(res1.status).toBe(200);
+    expect(res1.body.count).toBe(2);
+    expect(res1.body.mode).toBe("update");
+    expect(res1.body.jobs.map((j) => j.ID).sort()).toEqual(["alpha", "beta"].sort());
+
+    currentBatch = fullBatch;
+
+    const res2 = await request(app)
+      .get("/data/sync?mode=full")
+      .set("Authorization", `Bearer ${getToken()}`);
+
+    expect(res2.status).toBe(200);
+    expect(res2.body.mode).toBe("full");
+    expect(res2.body.count).toBe(1);
+    expect(res2.body.jobs.map((j) => j.ID)).toEqual(["gamma"]);
+    expect(res2.body.upserted).toBe(1);
+
+    const res3 = await request(app)
+      .get("/data/jobs")
+      .set("Authorization", `Bearer ${getToken()}`);
+
+    expect(res3.status).toBe(200);
+    expect(res3.body.total).toBe(1);
+    expect(res3.body.jobs[0].ID).toBe("gamma");
+
+    const fromValues = listCalls.map((c) => c.from);
+    expect(fromValues.every((from) => from === "2025-01-01" || from == null)).toBe(true);
+  });
+
   test("/jobs applies filtering and sorting", async () => {
     mockJobsEndpoints(jobsMock);
 
