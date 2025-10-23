@@ -1,3 +1,4 @@
+import { useMemo, useState, useCallback } from 'react';
 import { Loader2 } from '../../components/icons';
 import { formatCurrency, formatDate, classBadgeProps } from '../../utils/jobs';
 
@@ -8,7 +9,15 @@ interface JobsTableProps {
   isLoading: boolean;
 }
 
+type SortDirection = 'asc' | 'desc' | null;
+type SortKey = 'customer' | 'site' | 'status' | 'issued' | 'revenue' | 'profitability';
+
 export function JobsTable({ jobs, isLoading }: JobsTableProps) {
+  const [sortState, setSortState] = useState<{ key: SortKey | null; direction: SortDirection }>({
+    key: null,
+    direction: null,
+  });
+
   const toDisplayString = (value: unknown): string => {
     if (value === null || value === undefined) return '-';
     if (typeof value === 'string') return value;
@@ -51,6 +60,50 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
       return Number.isFinite(parsed) ? parsed : null;
     }
 
+    return null;
+  };
+
+  const toSortableString = (value: unknown): string | null => {
+    const display = toDisplayString(value);
+    if (!display || display === '-' || !display.trim()) return null;
+    return display.trim().toLowerCase();
+  };
+
+  const getCustomerValue = (job: ApiJob) =>
+    job.customerName ??
+    job.Customer?.CompanyName ??
+    job.Customer?.Name ??
+    job.Customer ??
+    null;
+
+  const getSiteValue = (job: ApiJob) => job.siteName ?? job.Site?.Name ?? job.Site ?? null;
+
+  const getStatusValue = (job: ApiJob) =>
+    job.statusName ?? job.Status?.Name ?? job.Status ?? job.Stage ?? null;
+
+  const getIssuedValue = (job: ApiJob) =>
+    job.Issued ?? job.DateIssued ?? job.dateIssued ?? job.issued ?? null;
+
+  const getDueValue = (job: ApiJob) =>
+    job.Due ?? job.DueDate ?? job.dateDue ?? job.DateDue ?? job.due ?? null;
+
+  const getNameValue = (job: ApiJob) => job.Name ?? job.RequestNo ?? null;
+
+  const getIdValue = (job: ApiJob) => job.ID ?? job.id ?? null;
+
+  const getRevenueValue = (job: ApiJob) =>
+    toNumber(job.revenue) ?? toNumber(job.Total?.IncTax) ?? null;
+
+  const getProfitClassValue = (job: ApiJob) =>
+    job.profitability?.class ?? job.profitability_class ?? null;
+
+  const getProfitRank = (job: ApiJob): number | null => {
+    const cls = getProfitClassValue(job);
+    if (!cls || typeof cls !== 'string') return null;
+    const key = cls.trim().toLowerCase();
+    if (key === 'low') return 0;
+    if (key === 'medium') return 1;
+    if (key === 'high') return 2;
     return null;
   };
 
@@ -97,6 +150,133 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
     return `${text.substring(0, maxLength)}...`;
   };
 
+  const parseDateValue = (value: unknown): Date | null => {
+    if (value === null || value === undefined) return null;
+    if (value instanceof Date) {
+      return Number.isFinite(value.getTime()) ? value : null;
+    }
+    if (typeof value === 'string' || typeof value === 'number') {
+      const candidate = new Date(value);
+      return Number.isFinite(candidate.getTime()) ? candidate : null;
+    }
+    return null;
+  };
+
+  function getSortConfig(key: SortKey): {
+    type: 'string' | 'number';
+    extractor: (job: ApiJob) => string | number | null;
+  } {
+    switch (key) {
+      case 'customer':
+        return {
+          type: 'string',
+          extractor: (job) => toSortableString(getCustomerValue(job)),
+        };
+      case 'site':
+        return {
+          type: 'string',
+          extractor: (job) => toSortableString(getSiteValue(job)),
+        };
+      case 'status':
+        return {
+          type: 'string',
+          extractor: (job) => toSortableString(getStatusValue(job)),
+        };
+      case 'issued':
+        return {
+          type: 'number',
+          extractor: (job) => {
+            const issued = getIssuedValue(job) ?? getDueValue(job);
+            const parsed = parseDateValue(issued);
+            return parsed ? parsed.getTime() : null;
+          },
+        };
+      case 'revenue':
+        return {
+          type: 'number',
+          extractor: (job) => getRevenueValue(job),
+        };
+      case 'profitability':
+      default:
+        return {
+          type: 'number',
+          extractor: (job) => getProfitRank(job),
+        };
+    }
+  }
+
+  const compareValues = (
+    aValue: string | number | null,
+    bValue: string | number | null,
+    type: 'string' | 'number',
+  ) => {
+    if (aValue === null || aValue === undefined) {
+      return bValue === null || bValue === undefined ? 0 : 1;
+    }
+    if (bValue === null || bValue === undefined) {
+      return -1;
+    }
+
+    if (type === 'number') {
+      return (aValue as number) - (bValue as number);
+    }
+
+    return String(aValue).localeCompare(String(bValue), undefined, {
+      sensitivity: 'base',
+      numeric: true,
+    });
+  };
+
+  const sortedJobs = useMemo(() => {
+    if (!sortState.key || !sortState.direction) {
+      return jobs;
+    }
+
+  const { extractor, type } = getSortConfig(sortState.key);
+    const directionFactor = sortState.direction === 'asc' ? 1 : -1;
+
+    return [...jobs]
+      .map((job, index) => ({ job, index }))
+      .sort((a, b) => {
+        const aValue = extractor(a.job);
+        const bValue = extractor(b.job);
+        const primary = compareValues(aValue, bValue, type);
+        if (primary !== 0) {
+          return primary * directionFactor;
+        }
+        return a.index - b.index;
+      })
+      .map(({ job }) => job);
+  }, [jobs, sortState]);
+
+  const handleSort = useCallback(
+    (key: SortKey) => {
+      setSortState((prev) => {
+        if (prev.key !== key) {
+          return { key, direction: 'asc' };
+        }
+        if (prev.direction === 'asc') {
+          return { key, direction: 'desc' };
+        }
+        if (prev.direction === 'desc') {
+          return { key: null, direction: null };
+        }
+        return { key, direction: 'asc' };
+      });
+    },
+    [],
+  );
+
+  const renderSortIndicator = (key: SortKey) => {
+    if (sortState.key !== key || !sortState.direction) {
+      return <span className="text-slate-600">⇅</span>;
+    }
+    if (sortState.direction === 'asc') {
+      return <span className="text-slate-200">▲</span>;
+    }
+    return <span className="text-slate-200">▼</span>;
+  };
+
   if (jobs.length === 0 && !isLoading) {
     return (
       <div className="relative min-h-[400px] bg-slate-900 rounded-xl border border-slate-800">
@@ -134,30 +314,72 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
                 Name
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">
-                Customer
+                <button
+                  type="button"
+                  onClick={() => handleSort('customer')}
+                  className="flex items-center gap-1 uppercase tracking-wider text-xs font-medium text-slate-400 hover:text-slate-100 transition-colors"
+                >
+                  <span>Customer</span>
+                  {renderSortIndicator('customer')}
+                </button>
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">
-                Site
+                <button
+                  type="button"
+                  onClick={() => handleSort('site')}
+                  className="flex items-center gap-1 uppercase tracking-wider text-xs font-medium text-slate-400 hover:text-slate-100 transition-colors"
+                >
+                  <span>Site</span>
+                  {renderSortIndicator('site')}
+                </button>
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">
-                Status
+                <button
+                  type="button"
+                  onClick={() => handleSort('status')}
+                  className="flex items-center gap-1 uppercase tracking-wider text-xs font-medium text-slate-400 hover:text-slate-100 transition-colors"
+                >
+                  <span>Status</span>
+                  {renderSortIndicator('status')}
+                </button>
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">
-                Issued
+                <button
+                  type="button"
+                  onClick={() => handleSort('issued')}
+                  className="flex items-center gap-1 uppercase tracking-wider text-xs font-medium text-slate-400 hover:text-slate-100 transition-colors"
+                >
+                  <span>Issued</span>
+                  {renderSortIndicator('issued')}
+                </button>
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">
                 Due
               </th>
               <th className="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">
-                Revenue (IncTax)
+                <button
+                  type="button"
+                  onClick={() => handleSort('revenue')}
+                  className="flex items-center justify-end gap-1 uppercase tracking-wider text-xs font-medium text-slate-400 hover:text-slate-100 transition-colors w-full"
+                >
+                  <span>Revenue (IncTax)</span>
+                  {renderSortIndicator('revenue')}
+                </button>
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">
-                Profitability
+                <button
+                  type="button"
+                  onClick={() => handleSort('profitability')}
+                  className="flex items-center gap-1 uppercase tracking-wider text-xs font-medium text-slate-400 hover:text-slate-100 transition-colors"
+                >
+                  <span>Profitability</span>
+                  {renderSortIndicator('profitability')}
+                </button>
               </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">
-            {jobs.map((job, index) => {
+            {sortedJobs.map((job, index) => {
               if (!job || typeof job !== 'object') {
                 return (
                   <tr key={`invalid-${index}`} className="bg-red-900/20">
@@ -169,26 +391,16 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
               }
 
               const jobRecord = job as ApiJob;
-              const jobKey = jobRecord.ID ?? jobRecord.id ?? `row-${index}`;
+              const jobKey = getIdValue(jobRecord) ?? `row-${index}`;
 
-              const customerValue =
-                jobRecord.customerName ??
-                jobRecord.Customer?.CompanyName ??
-                jobRecord.Customer?.Name ??
-                jobRecord.Customer ??
-                null;
-              const siteValue =
-                jobRecord.siteName ??
-                jobRecord.Site?.Name ??
-                jobRecord.Site ??
-                null;
-              const nameValue = jobRecord.Name ?? jobRecord.RequestNo;
-              const statusValue =
-                jobRecord.statusName ??
-                jobRecord.Status?.Name ??
-                jobRecord.Status ??
-                jobRecord.Stage;
-              const idValue = jobRecord.ID ?? jobRecord.id;
+              const customerValue = getCustomerValue(jobRecord);
+              const siteValue = getSiteValue(jobRecord);
+              const nameValue = getNameValue(jobRecord);
+              const statusValue = getStatusValue(jobRecord);
+              const idValue = getIdValue(jobRecord);
+              const issuedValue = getIssuedValue(jobRecord);
+              const dueValue = getDueValue(jobRecord);
+              const revenueValue = getRevenueValue(jobRecord);
 
               const customerText = truncate(customerValue);
               const siteText = truncate(siteValue);
@@ -197,8 +409,6 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
               const idText = truncate(idValue);
               const customerTitle = toDisplayString(customerValue);
               const siteTitle = toDisplayString(siteValue);
-              const revenueValue =
-                toNumber(jobRecord.revenue) ?? toNumber(jobRecord?.Total?.IncTax);
 
               return (
                 <tr
@@ -233,10 +443,10 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
                     {statusText}
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-300 whitespace-nowrap">
-                    {formatDate(jobRecord.Issued ?? jobRecord.DateIssued)}
+                    {formatDate(issuedValue)}
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-300 whitespace-nowrap">
-                    {formatDate(jobRecord.Due ?? jobRecord.DueDate)}
+                    {formatDate(dueValue)}
                   </td>
                   <td className="px-4 py-3 text-sm text-slate-100 text-right whitespace-nowrap font-medium">
                     {formatCurrency(revenueValue)}

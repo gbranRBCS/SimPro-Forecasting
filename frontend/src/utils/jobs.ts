@@ -49,7 +49,7 @@ export function formatDate(s: string | Date | null | undefined) {
   if (!s) return "—";
   try {
     const d = new Date(s as any);
-    return isNaN(d.getTime()) ? "—" : d.toLocaleDateString();
+    return isNaN(d.getTime()) ? "—" : d.toLocaleDateString('en-GB');
   } catch (e) {
     return "—";
   }

@@ -15,8 +15,8 @@ Features
 ⸻
 
 Tech Stack
-- Frontend: React.js + TailwindCSS
+- Frontend: React + Vite, TailwindCSS
 - Backend: Node.js / Express
-- Database: PostgreSQL (or SQLite for development/testing)
+- Database: SQLite
 - Machine Learning: Python (scikit-learn)
 - Version Control: Git
