@@ -436,9 +436,25 @@ function normaliseJob(j) {
 
   const dateIssued = j?.DateIssued ?? null;
   const dateDue = j?.DueDate ?? null;
+  const dateCompleted = j?.DateCompleted ?? j?.CompletedDate ?? null;
+  
   const age_days = dateIssued ? daysBetween(dateIssued, new Date()) : null;
   const due_in_days =
     dateIssued && dateDue ? daysBetween(dateIssued, dateDue) : null;
+  
+  // calculate actual completion time - completed jobs only
+  const completion_days = 
+    dateIssued && dateCompleted ? daysBetween(dateIssued, dateCompleted) : null;
+  
+  // is job completed?
+  const isCompleted = dateCompleted != null;
+
+  // is job overdue (due date passed but not completed || completed late)?
+  const isOverdue = dateDue ? (
+    dateCompleted 
+      ? new Date(dateCompleted) > new Date(dateDue)
+      : new Date() > new Date(dateDue)
+  ) : false;
 
   const statusName = j?.Status?.Name ?? null;
   const stage = j?.Stage ?? null;
@@ -456,6 +472,7 @@ function normaliseJob(j) {
     status: j?.Status ?? null,
     dateIssued,
     dateDue,
+    dateCompleted,
     customerName: j?.Customer?.CompanyName ?? null,
     siteName: j?.Site?.Name ?? null,
     jobType,
@@ -470,6 +487,9 @@ function normaliseJob(j) {
     profitability_class,
     age_days,
     due_in_days,
+    completion_days,
+    is_completed: isCompleted,
+    is_overdue: isOverdue,
     status_name: statusName,
     stage,
     desc_len: descriptionText.length,

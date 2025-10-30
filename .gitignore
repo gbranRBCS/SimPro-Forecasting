@@ -41,6 +41,11 @@ __pycache__/
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
+*.db-journal
+backend/data/
+backend/backend/data/
 
 #sensitive train data
 ./ml/train.json

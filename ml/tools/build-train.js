@@ -66,15 +66,31 @@ function deriveRow(j) {
     labour: lab,
     overhead: ovh,
     cost_total,
-    statusName: j.statusName ?? null,
+    statusName: j.statusName ?? j.status_name ?? null,
     jobType: j.jobType ?? null,
     customerName: j.customerName ?? null,
     siteName: j.siteName ?? null,
-    job_age_days: j.job_age_days ?? null,
-    lead_time_days: j.lead_time_days ?? null,
-    is_overdue: j.is_overdue ?? 0,
-    descriptionText: j.descriptionText ?? "",
+    
+    // date features
     dateIssued: j.dateIssued ?? null,
+    dateDue: j.dateDue ?? null,
+    dateCompleted: j.dateCompleted ?? null,
+    
+    // calculated time features
+    job_age_days: j.age_days ?? j.job_age_days ?? null,
+    lead_time_days: j.due_in_days ?? j.lead_time_days ?? null,
+    completion_days: j.completion_days ?? null,  // NEW: actual completion time
+    
+    // status flags
+    is_completed: j.is_completed ?? false,
+    is_overdue: j.is_overdue ?? 0,
+
+    // text features
+    descriptionText: j.descriptionText ?? "",
+    desc_len: j.desc_len ?? (j.descriptionText?.length ?? 0),
+    has_emergency: j.has_emergency ?? 0,
+
+    // target variables
     ...(netMarginPct != null ? { netMarginPct } : {}),
     ...(profitability_class ? { profitability_class } : {})
   };
