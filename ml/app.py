@@ -16,10 +16,18 @@ from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 from sklearn.impute import SimpleImputer
 from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
+from sklearn.linear_model import LogisticRegression, LinearRegression
 from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
-from sklearn.metrics import f1_score, classification_report, confusion_matrix
+from sklearn.metrics import (
+    f1_score,
+    classification_report,
+    confusion_matrix,
+    mean_absolute_error,
+    mean_squared_error,
+    r2_score,
+)
 from sklearn.calibration import CalibratedClassifierCV
+from sklearn.ensemble import RandomForestRegressor
 
 MODULE_DIR = os.path.dirname(__file__)
 if MODULE_DIR and MODULE_DIR not in sys.path:
@@ -31,6 +39,8 @@ app = FastAPI(title="ML Service", version="1.0.0")
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "model.joblib")
 META_PATH = os.environ.get("MODEL_META_PATH", "model_meta.json")
+DURATION_MODEL_PATH = os.environ.get("DURATION_MODEL_PATH", "model_duration.joblib")
+DURATION_META_PATH = os.environ.get("DURATION_MODEL_META_PATH", "model_duration_meta.json")
 
 class PredictRequest(BaseModel):
     data: List[Dict[str, Any]]
@@ -134,6 +144,20 @@ def to_serializable(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(k): to_serializable(v) for k, v in value.items()}
     return str(value)
+
+
+def to_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(int(value) == 1)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y"}:
+            return True
+        if normalized in {"false", "0", "no", "n"}:
+            return False
+    return False
 
 
 def fallback_classification(j: Dict[str, Any]):
@@ -358,10 +382,209 @@ def build_pipeline(
     )
     return pipe
 
+
+def build_duration_dataset(
+    records: List[Dict[str, Any]]
+) -> Tuple[pd.DataFrame, pd.Series, Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    durations: List[Optional[float]] = []
+    is_completed_flags: List[bool] = []
+    issued_dates: List[Any] = []
+    job_ids: List[Any] = []
+
+    for j in records:
+        revenue = to_num(j.get("revenue") or (j.get("Total", {}) or {}).get("IncTax"))
+        materials = to_num(j.get("materials")) or 0.0
+        labour = to_num(j.get("labour")) or 0.0
+        overhead = to_num(j.get("overhead")) or 0.0
+
+        cost_total = to_num(j.get("cost_total"))
+        if cost_total is None:
+            cost_total = to_num(j.get("cost_est_total"))
+        if cost_total is None and (materials or labour or overhead):
+            cost_total = materials + labour + overhead
+
+        job_age = to_num(j.get("job_age_days"))
+        if job_age is None:
+            job_age = 0.0
+
+        lead_time = to_num(j.get("lead_time_days"))
+        if lead_time is None:
+            lead_time = 0.0
+
+        overdue = to_num(j.get("is_overdue"))
+        if overdue is None:
+            overdue = 0.0
+
+        issued_date_value = (
+            j.get("dateIssued")
+            or j.get("DateIssued")
+            or j.get("issuedDate")
+            or j.get("IssuedDate")
+            or j.get("createdDate")
+            or j.get("CreatedDate")
+        )
+
+        row = {
+            "revenue": revenue,
+            "materials": materials if materials is not None else None,
+            "labour": labour if labour is not None else None,
+            "overhead": overhead if overhead is not None else None,
+            "cost_total": cost_total,
+            "job_age_days": job_age,
+            "lead_time_days": lead_time,
+            "is_overdue": overdue,
+            "statusName": to_text(j.get("statusName")),
+            "jobType": to_text(j.get("jobType")),
+            "customerName": to_text(j.get("customerName")),
+            "siteName": to_text(j.get("siteName")),
+            "descriptionText": to_text(j.get("descriptionText"), allow_blank=True) or "",
+            "_id": j.get("ID") or j.get("id"),
+            "dateIssued": issued_date_value,
+        }
+
+        rows.append(row)
+        job_ids.append(row["_id"])
+        issued_dates.append(issued_date_value)
+
+        is_completed_flag = to_bool(j.get("is_completed"))
+        is_completed_flags.append(is_completed_flag)
+
+        completion_days = to_num(j.get("completion_days"))
+        if (
+            is_completed_flag
+            and completion_days is not None
+            and float(completion_days) > 0
+        ):
+            durations.append(float(completion_days))
+        else:
+            durations.append(None)
+
+    df = pd.DataFrame(rows)
+    y = pd.Series(durations, dtype="float") if len(rows) else pd.Series(dtype="float")
+    info = {
+        "is_completed": pd.Series(is_completed_flags, dtype="bool")
+        if len(is_completed_flags)
+        else pd.Series(dtype="bool"),
+        "issued_dates": pd.Series(issued_dates, dtype="object")
+        if len(issued_dates)
+        else pd.Series(dtype="object"),
+        "job_ids": job_ids,
+    }
+    return df, y, info
+
+
+def build_duration_pipeline(
+    *,
+    max_tfidf_features: int = 500,
+    use_text: bool = True,
+    rare_top_k: int = 20,
+    estimator: Optional[Any] = None,
+) -> Pipeline:
+    numeric_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+        ]
+    )
+    categorical_transformer = Pipeline(
+        steps=[
+            ("imputer", SimpleImputer(strategy="most_frequent")),
+            ("onehot", OneHotEncoder(handle_unknown="ignore")),
+        ]
+    )
+
+    transformers = [
+        ("num", numeric_transformer, NUMERIC_COLS),
+        ("cat", categorical_transformer, CATEGORICAL_COLS),
+    ]
+    if use_text:
+        text_transformer = TfidfVectorizer(
+            max_features=max_tfidf_features,
+            ngram_range=(1, 2),
+        )
+        transformers.append(("txt", text_transformer, TEXT_COL))
+
+    pre = ColumnTransformer(
+        transformers=transformers,
+        remainder="drop",
+        sparse_threshold=0.3,
+        verbose_feature_names_out=False,
+    )
+
+    if estimator is None:
+        estimator = RandomForestRegressor(n_estimators=300, random_state=42)
+
+    pipe = Pipeline(
+        steps=[
+            (
+                "rare_cap",
+                RareCategoryCapper(columns=["customerName", "siteName"], top_k=rare_top_k),
+            ),
+            ("pre", pre),
+            ("reg", estimator),
+        ]
+    )
+    return pipe
+
+
+def select_duration_model(
+    X_train: pd.DataFrame,
+    y_train: pd.Series,
+    X_test: pd.DataFrame,
+    y_test: pd.Series,
+    *,
+    use_text: bool,
+    rare_top_k: int,
+    max_tfidf_features: int,
+) -> Dict[str, Any]:
+    estimators: List[Tuple[str, Any]] = [
+        (
+            "RandomForestRegressor",
+            RandomForestRegressor(n_estimators=300, random_state=42),
+        )
+    ]
+    if len(X_train) < 80:
+        estimators.append(("LinearRegression", LinearRegression()))
+
+    best_result: Optional[Dict[str, Any]] = None
+
+    for model_name, estimator in estimators:
+        pipeline = build_duration_pipeline(
+            max_tfidf_features=max_tfidf_features,
+            use_text=use_text,
+            rare_top_k=rare_top_k,
+            estimator=estimator,
+        )
+        pipeline.fit(X_train, y_train)
+        preds = pipeline.predict(X_test)
+        mae = float(mean_absolute_error(y_test, preds))
+        rmse = float(math.sqrt(mean_squared_error(y_test, preds)))
+        r2 = float(r2_score(y_test, preds))
+        result = {
+            "model": pipeline,
+            "model_name": model_name,
+            "metrics": {"MAE": mae, "RMSE": rmse, "R2": r2},
+        }
+        if best_result is None or mae < best_result["metrics"]["MAE"]:
+            best_result = result
+
+    if best_result is None:
+        raise RuntimeError("No regression model could be trained.")
+    return best_result
+
+
 def save_model(model: Pipeline, meta: Dict[str, Any]) -> None:
     joblib.dump(model, MODEL_PATH)
     with open(META_PATH, "w") as f:
         json.dump(meta, f, indent=2)
+
+
+def save_duration_model(model: Pipeline, meta: Dict[str, Any]) -> None:
+    joblib.dump(model, DURATION_MODEL_PATH)
+    with open(DURATION_META_PATH, "w") as f:
+        json.dump(meta, f, indent=2)
+
 
 def load_model() -> Tuple[Optional[Pipeline], Optional[Dict[str, Any]]]:
     if not os.path.exists(MODEL_PATH):
@@ -370,6 +593,17 @@ def load_model() -> Tuple[Optional[Pipeline], Optional[Dict[str, Any]]]:
     meta = None
     if os.path.exists(META_PATH):
         with open(META_PATH) as f:
+            meta = json.load(f)
+    return model, meta
+
+
+def load_duration_model() -> Tuple[Optional[Pipeline], Optional[Dict[str, Any]]]:
+    if not os.path.exists(DURATION_MODEL_PATH):
+        return None, None
+    model = joblib.load(DURATION_MODEL_PATH)
+    meta = None
+    if os.path.exists(DURATION_META_PATH):
+        with open(DURATION_META_PATH) as f:
             meta = json.load(f)
     return model, meta
 
@@ -690,3 +924,195 @@ def build_prediction_diagnostics(
         diagnostics["job_ids"] = []
 
     return diagnostics
+
+
+@app.post("/train_duration")
+def train_duration(payload: TrainRequest = Body(...)):
+    df, y_all, info = build_duration_dataset(payload.data)
+
+    if df.empty:
+        return {"ok": False, "error": "No rows provided for training."}
+
+    labelled_mask = y_all.notna()
+    X = df.loc[labelled_mask]
+    y = y_all.loc[labelled_mask]
+
+    if len(X) < 30:
+        return {
+            "ok": False,
+            "error": "Not enough labelled data to train duration model (need >=30 rows).",
+        }
+
+    rare_top_k = int(payload.rare_top_k) if payload.rare_top_k is not None else 20
+    use_text_flag = True if payload.use_text is None else bool(payload.use_text)
+    max_tfidf = (
+        int(payload.max_tfidf_features)
+        if payload.max_tfidf_features is not None
+        else 500
+    )
+
+    issued_series = info.get("issued_dates")
+    if isinstance(issued_series, pd.Series):
+        issued_series = issued_series.loc[labelled_mask]
+    else:
+        issued_series = pd.Series([], dtype="object")
+
+    cutoff_date = payload.cutoff_date
+    split_strategy = "random"
+
+    if cutoff_date:
+        cutoff_ts = pd.to_datetime(cutoff_date, errors="coerce")
+        if pd.isna(cutoff_ts):
+            return {"ok": False, "error": f"Invalid cutoff_date '{cutoff_date}'."}
+
+        date_series = pd.to_datetime(issued_series, errors="coerce")
+        if date_series.notna().any():
+            split_strategy = "temporal"
+            train_mask = (date_series < cutoff_ts) | date_series.isna()
+            test_mask = date_series >= cutoff_ts
+            X_train, y_train = X.loc[train_mask], y.loc[train_mask]
+            X_test, y_test = X.loc[test_mask], y.loc[test_mask]
+            if len(X_train) == 0 or len(X_test) == 0:
+                return {
+                    "ok": False,
+                    "error": "Temporal split failed: adjust cutoff_date to ensure both train and test sets have data.",
+                }
+        else:
+            split_strategy = "random"
+
+    if split_strategy == "random":
+        test_size = payload.test_size if payload.test_size is not None else 0.15
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            test_size=test_size,
+            random_state=payload.random_state,
+        )
+
+    try:
+        selection = select_duration_model(
+            X_train,
+            y_train,
+            X_test,
+            y_test,
+            use_text=use_text_flag,
+            rare_top_k=rare_top_k,
+            max_tfidf_features=max_tfidf,
+        )
+    except ValueError as exc:
+        if use_text_flag and "empty vocabulary" in str(exc).lower():
+            use_text_flag = False
+            selection = select_duration_model(
+                X_train,
+                y_train,
+                X_test,
+                y_test,
+                use_text=use_text_flag,
+                rare_top_k=rare_top_k,
+                max_tfidf_features=max_tfidf,
+            )
+        else:
+            return {"ok": False, "error": f"Training failed: {exc}"}
+    except Exception as exc:
+        return {"ok": False, "error": f"Training failed: {exc}"}
+
+    final_model: Pipeline = selection["model"]
+    final_model.fit(X, y)
+
+    features_used = NUMERIC_COLS + CATEGORICAL_COLS + ([TEXT_COL] if use_text_flag else [])
+
+    meta = {
+        "model_name": selection["model_name"],
+        "metrics": selection["metrics"],
+        "features": features_used,
+        "use_text": use_text_flag,
+        "cutoff_date": cutoff_date if split_strategy == "temporal" else None,
+        "split_strategy": split_strategy,
+        "n_train": int(len(X_train)),
+        "n_test": int(len(X_test)),
+        "n_samples": int(len(X)),
+        "max_tfidf_features": max_tfidf,
+        "rare_top_k": rare_top_k,
+    }
+
+    save_duration_model(final_model, meta)
+
+    return {
+        "ok": True,
+        "model_name": selection["model_name"],
+        "metrics": selection["metrics"],
+        "split": {
+            "strategy": split_strategy,
+            "cutoff_date": cutoff_date if split_strategy == "temporal" else None,
+            "n_train": int(len(X_train)),
+            "n_test": int(len(X_test)),
+        },
+        "use_text": use_text_flag,
+    }
+
+
+@app.post("/predict_duration")
+def predict_duration(payload: PredictRequest = Body(...)):
+    jobs = payload.data or []
+    model, meta = load_duration_model()
+
+    if not model:
+        results = [
+            {
+                "jobId": job.get("ID") or job.get("id"),
+                "skipped": True,
+                "reason": "model_not_trained",
+            }
+            for job in jobs
+        ]
+        return {
+            "predictions": results,
+            "count": len(results),
+            "model_loaded": False,
+            "error": "Duration model not trained yet. Call /train_duration first.",
+        }
+
+    df: Optional[pd.DataFrame] = None
+    try:
+        df, _, info = build_duration_dataset(jobs)
+
+        if df.empty:
+            return {"predictions": [], "count": 0, "model_loaded": True}
+
+        preds = model.predict(df)
+
+        is_completed_series = info.get("is_completed")
+        if not isinstance(is_completed_series, pd.Series):
+            is_completed_series = pd.Series([False] * len(df))
+
+        results = []
+        for idx, job in enumerate(jobs):
+            job_id = info.get("job_ids")[idx] if info.get("job_ids") else job.get("ID") or job.get("id")
+            if idx < len(is_completed_series) and bool(is_completed_series.iloc[idx]):
+                results.append({"jobId": job_id, "skipped": True, "reason": "already_completed"})
+            else:
+                predicted_value = float(preds[idx])
+                results.append(
+                    {
+                        "jobId": job_id,
+                        "predicted_completion_days": predicted_value,
+                    }
+                )
+
+        response: Dict[str, Any] = {
+            "predictions": results,
+            "count": len(results),
+            "model_loaded": True,
+        }
+        if meta and meta.get("metrics"):
+            response["metrics"] = meta.get("metrics")
+        return response
+
+    except Exception as exc:
+        return {
+            "predictions": [],
+            "count": 0,
+            "model_loaded": False,
+            "error": f"duration prediction failed: {exc}",
+            "diagnostics": build_prediction_diagnostics(exc, jobs, df, model, meta),
+        }
