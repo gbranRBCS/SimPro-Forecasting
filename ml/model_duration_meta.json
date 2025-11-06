@@ -1,0 +1,31 @@
+{
+  "model_name": "RandomForestRegressor",
+  "metrics": {
+    "MAE": 2.373063063063063,
+    "RMSE": 3.8347749345690154,
+    "R2": 0.07166707297078545
+  },
+  "features": [
+    "revenue",
+    "materials",
+    "labour",
+    "overhead",
+    "cost_total",
+    "job_age_days",
+    "lead_time_days",
+    "is_overdue",
+    "statusName",
+    "jobType",
+    "customerName",
+    "siteName",
+    "descriptionText"
+  ],
+  "use_text": true,
+  "cutoff_date": null,
+  "split_strategy": "random",
+  "n_train": 144,
+  "n_test": 37,
+  "n_samples": 181,
+  "max_tfidf_features": 500,
+  "rare_top_k": 20
+}
