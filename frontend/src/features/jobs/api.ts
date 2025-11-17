@@ -45,3 +45,14 @@ export async function predict(body: Record<string, any>) {
   const res = await api.post("/data/predict", payload);
   return res.data;
 }
+
+export async function predictDuration(body: Record<string, any>) {
+  const payload: Record<string, any> = {};
+  Object.entries(body || {}).forEach(([key, value]) => {
+    if (value === undefined) return;
+    payload[key] = value;
+  });
+
+  const res = await api.post("/data/predict_duration", payload);
+  return res.data;
+}

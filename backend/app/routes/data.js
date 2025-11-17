@@ -761,17 +761,17 @@ router.post("/predict", authRequired, async (req, res) => {
     return res.json({ predictions: [], count: 0, model_loaded: false });
   }
 
-  if (!process.env.ML_URL) {
+  if (!process.env.ML_PROFITABILITY_URL) {
     return res.status(500).json({
-      error: "ML service URL not configured",
+      error: "ML profitability service URL not configured (set ML_PROFITABILITY_URL)",
     });
   }
 
   try {
     console.info(
-      `[predict] forwarding ${jobsToSendLimited.length} jobs to ML at ${process.env.ML_URL}/predict`,
+      `[predict] forwarding ${jobsToSendLimited.length} jobs to ML at ${process.env.ML_PROFITABILITY_URL}/predict`,
     );
-    const response = await axios.post(`${process.env.ML_URL}/predict`, {
+    const response = await axios.post(`${process.env.ML_PROFITABILITY_URL}/predict`, {
       data: jobsToSendLimited,
     });
     return res.json(response.data);
@@ -788,6 +788,88 @@ router.post("/predict", authRequired, async (req, res) => {
 
     return res.status(502).json({
       error: "ML Prediction failed",
+      mlStatus,
+      mlBody,
+    });
+  }
+});
+
+// predict job completion time with ML duration service
+router.post("/predict_duration", authRequired, async (req, res) => {
+  const bodyJobs = Array.isArray(req.body?.jobs) ? req.body.jobs : null;
+  const bodyJobIds = Array.isArray(req.body?.jobIds) ? req.body.jobIds : null;
+
+  const limitFromBody = Number.parseInt(req.body?.limit, 10);
+  const limitFromQuery = Number.parseInt(req.query?.limit, 10);
+  const effectiveLimit = Number.isFinite(limitFromBody)
+    ? limitFromBody
+    : Number.isFinite(limitFromQuery)
+    ? limitFromQuery
+    : null;
+
+  let jobsToSend = [];
+
+  if (bodyJobs?.length) {
+    jobsToSend = bodyJobs;
+  } else if (bodyJobIds?.length) {
+    const idSet = new Set(
+      bodyJobIds
+        .map((id) => {
+          if (id === null || id === undefined) return null;
+          try {
+            return String(id);
+          } catch (_) {
+            return null;
+          }
+        })
+        .filter(Boolean),
+    );
+
+    jobsToSend = cachedJobs.filter((job) => {
+      const id = job?.ID ?? job?.id;
+      return id != null && idSet.has(String(id));
+    });
+  } else {
+    jobsToSend = filterAndSortJobs(cachedJobs, req.query);
+  }
+
+  const jobsToSendLimited =
+    Number.isFinite(effectiveLimit) && effectiveLimit > 0
+      ? jobsToSend.slice(0, effectiveLimit)
+      : jobsToSend;
+
+  if (!jobsToSendLimited?.length) {
+    return res.json({ predictions: [], count: 0, model_loaded: false });
+  }
+
+  if (!process.env.ML_DURATION_URL) {
+    return res.status(500).json({
+      error: "ML duration service URL not configured (set ML_DURATION_URL)",
+    });
+  }
+
+  try {
+    console.info(
+      `[predict_duration] forwarding ${jobsToSendLimited.length} jobs to ML at ${process.env.ML_DURATION_URL}/predict_duration`,
+    );
+    const response = await axios.post(
+      `${process.env.ML_DURATION_URL}/predict_duration`,
+      { data: jobsToSendLimited },
+    );
+    return res.json(response.data);
+  } catch (err) {
+    console.error(
+      "Error forwarding jobs to ML duration service:",
+      axiosDiag(err),
+      "jobsCount:",
+      jobsToSendLimited.length,
+    );
+
+    const mlStatus = err.response?.status ?? null;
+    const mlBody = err.response?.data ?? { message: err.message };
+
+    return res.status(502).json({
+      error: "ML Duration prediction failed",
       mlStatus,
       mlBody,
     });

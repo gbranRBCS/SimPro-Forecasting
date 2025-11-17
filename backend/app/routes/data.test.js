@@ -9,7 +9,7 @@ import { jest } from "@jest/globals";
 // mock environment variables (must be set before importing the router)
 process.env.JWT_SECRET = "testsecret";
 process.env.SIMPRO_API_BASE = "http://mock-simpro";
-process.env.ML_URL = "http://mock-ml";
+process.env.ML_PROFITABILITY_URL = "http://mock-ml";
 process.env.SYNC_INTERVAL_MINUTES = "1"; // unused but retained for compatibility
 process.env.TOKEN_URL = "http://mock-auth/token";
 process.env.SIMPRO_CLIENT_ID = "cid";
@@ -351,7 +351,7 @@ describe("Data Routes", () => {
       if (url === process.env.TOKEN_URL) {
         return Promise.resolve({ data: { access_token: "mocktoken", expires_in: 3600 } });
       }
-      if (url === `${process.env.ML_URL}/predict`) {
+      if (url === `${process.env.ML_PROFITABILITY_URL}/predict`) {
         return Promise.resolve({ data: { prediction: "ok" } });
       }
       return Promise.reject(new Error(`Unexpected axios.post call to ${url}`));
@@ -365,7 +365,7 @@ describe("Data Routes", () => {
     expect(res1.body.prediction).toBe("ok");
 
     const mlCall = postSpy.mock.calls.find(
-      ([url]) => url === `${process.env.ML_URL}/predict`,
+      ([url]) => url === `${process.env.ML_PROFITABILITY_URL}/predict`,
     );
     expect(mlCall).toBeTruthy();
     expect(mlCall[1].data.map((j) => j.ID)).toEqual(["2", "3"]);
@@ -374,7 +374,7 @@ describe("Data Routes", () => {
       if (url === process.env.TOKEN_URL) {
         return Promise.resolve({ data: { access_token: "mocktoken", expires_in: 3600 } });
       }
-      if (url === `${process.env.ML_URL}/predict`) {
+      if (url === `${process.env.ML_PROFITABILITY_URL}/predict`) {
         return Promise.reject(new Error("ML down"));
       }
       return Promise.reject(new Error(`Unexpected axios.post call to ${url}`));
@@ -399,7 +399,7 @@ describe("Data Routes", () => {
       if (url === process.env.TOKEN_URL) {
         return Promise.resolve({ data: { access_token: "mocktoken", expires_in: 3600 } });
       }
-      if (url === `${process.env.ML_URL}/predict`) {
+      if (url === `${process.env.ML_PROFITABILITY_URL}/predict`) {
         return Promise.resolve({ data: { predictions: [{ jobId: "2", class: "High" }] } });
       }
       return Promise.reject(new Error(`Unexpected axios.post call to ${url}`));
@@ -414,7 +414,7 @@ describe("Data Routes", () => {
     expect(res.body.predictions).toEqual([{ jobId: "2", class: "High" }]);
 
     const mlCall = postSpy.mock.calls.find(
-      ([url]) => url === `${process.env.ML_URL}/predict`,
+      ([url]) => url === `${process.env.ML_PROFITABILITY_URL}/predict`,
     );
     expect(mlCall[1].data).toHaveLength(1);
     expect(mlCall[1].data[0].ID).toBe("2");
