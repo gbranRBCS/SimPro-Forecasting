@@ -6,11 +6,11 @@ import express from "express";
 import jwt from "jsonwebtoken";
 import { jest } from "@jest/globals";
 
-// mock environment variables (must be set before importing the router)
+// mock environment variables
 process.env.JWT_SECRET = "testsecret";
 process.env.SIMPRO_API_BASE = "http://mock-simpro";
 process.env.ML_PROFITABILITY_URL = "http://mock-ml";
-process.env.SYNC_INTERVAL_MINUTES = "1"; // unused but retained for compatibility
+process.env.SYNC_INTERVAL_MINUTES = "1";
 process.env.TOKEN_URL = "http://mock-auth/token";
 process.env.SIMPRO_CLIENT_ID = "cid";
 process.env.SIMPRO_CLIENT_SECRET = "secret";

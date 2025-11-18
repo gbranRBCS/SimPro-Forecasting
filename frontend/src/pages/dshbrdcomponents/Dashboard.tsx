@@ -518,25 +518,50 @@ export function Dashboard() {
         isLoading={isLoading}
       />
 
-      <main className="px-6 py-6 space-y-4">
-        {statusMessage && (
-          <StatusAlert message={statusMessage.text} type={statusMessage.type} />
-        )}
+      <main className="px-6 py-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left Panel - Jobs Table and Controls */}
+          <div className="space-y-4">
+            {statusMessage && (
+              <StatusAlert message={statusMessage.text} type={statusMessage.type} />
+            )}
 
-        {isSyncing && <SyncProgressCard />}
+            {isSyncing && <SyncProgressCard />}
 
-        {predictionSummary && (
-          <PredictionSummary summary={predictionSummary} />
-        )}
+            {predictionSummary && (
+              <PredictionSummary summary={predictionSummary} />
+            )}
 
-        <JobsTable jobs={jobs} isLoading={isLoading} />
+            <JobsTable jobs={jobs} isLoading={isLoading} />
 
-        <Pagination
-          pagination={pagination}
-          onPageChange={handlePageChange}
-          onPageSizeChange={handlePageSizeChange}
-          disabled={isLoading || isSyncing}
-        />
+            <Pagination
+              pagination={pagination}
+              onPageChange={handlePageChange}
+              onPageSizeChange={handlePageSizeChange}
+              disabled={isLoading || isSyncing}
+            />
+          </div>
+
+          {/* Right Panel - Predictions and Visualizations */}
+          <div className="space-y-4">
+            <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-6">
+              <h2 className="text-xl font-semibold text-slate-100 mb-2">
+                Predictions & Visualizations
+              </h2>
+              <p className="text-sm text-slate-400">
+                This panel will display prediction results and data visualizations.
+              </p>
+              <div className="mt-6 border-t border-slate-800 pt-6">
+                <div className="text-center text-slate-500 py-12">
+                  <p className="text-lg font-medium mb-2">Coming Soon</p>
+                  <p className="text-sm">
+                    Prediction models and interactive charts will appear here.
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </main>
     </div>
   );
