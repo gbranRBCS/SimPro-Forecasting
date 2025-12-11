@@ -15,7 +15,6 @@ interface ToolbarProps {
   onFilterChange: (filters: FilterState) => void;
   onSync: (mode: 'update' | 'full') => void;
   onLoadJobs: () => void;
-  onPredict: () => void;
   isSyncing: boolean;
   isLoading: boolean;
 }
@@ -25,7 +24,6 @@ export function Toolbar({
   onFilterChange,
   onSync,
   onLoadJobs,
-  onPredict,
   isSyncing,
   isLoading,
 }: ToolbarProps) {
@@ -225,15 +223,6 @@ export function Toolbar({
           >
             <Filter className="w-4 h-4" />
             Load Jobs
-          </button>
-
-          <button
-            onClick={onPredict}
-            disabled={isDisabled}
-            className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-600/60 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-          >
-            <Sparkles className="w-4 h-4" />
-            Predict
           </button>
         </div>
       </div>

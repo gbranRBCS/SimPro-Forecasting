@@ -1,18 +1,23 @@
 import { useMemo, useState, useCallback } from 'react';
 import { Loader2 } from '../../components/icons';
 import { formatCurrency, formatDate, classBadgeProps } from '../../utils/jobs';
+import type { Prediction } from '../../features/jobs/api';
 
 type ApiJob = Record<string, any>;
 
 interface JobsTableProps {
   jobs: ApiJob[];
   isLoading: boolean;
+  selectedJobIds?: string[];
+  onSelectionChange?: (ids: string[]) => void;
+  predictions?: Record<string, Prediction>;
+  predictionType?: 'profitability' | 'duration' |'none';
 }
 
 type SortDirection = 'asc' | 'desc' | null;
 type SortKey = 'customer' | 'site' | 'status' | 'issued' | 'revenue' | 'profitability';
 
-export function JobsTable({ jobs, isLoading }: JobsTableProps) {
+export function JobsTable({ jobs, isLoading, selectedJobIds = [], onSelectionChange, predictions = {}, predictionType = 'none' }: JobsTableProps) {
   const [sortState, setSortState] = useState<{ key: SortKey | null; direction: SortDirection }>({
     key: null,
     direction: null,
@@ -308,6 +313,24 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
           <thead>
             <tr className="border-b border-slate-800">
               <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  checked={jobs.length > 0 && jobs.every((j) => selectedJobIds.includes(String(j.ID ?? j.id ?? '')))}
+                  onChange={(e) => {
+                    if (!onSelectionChange) return;
+                    if (e.target.checked) {
+                      const ids = jobs
+                        .map((j) => j.ID ?? j.id ?? null)
+                        .filter((x) => x !== null)
+                        .map((x) => String(x));
+                      onSelectionChange(ids);
+                    } else {
+                      onSelectionChange([]);
+                    }
+                  }}
+                />
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">
                 ID
               </th>
               <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">
@@ -376,6 +399,12 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
                   {renderSortIndicator('profitability')}
                 </button>
               </th>
+              {predictionType === 'profitability' && (
+                <>
+                  <th className="px-4 py-3 text-left text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">Predicted class</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">Confidence</th>
+                </>
+              )}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">
@@ -410,11 +439,26 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
               const customerTitle = toDisplayString(customerValue);
               const siteTitle = toDisplayString(siteValue);
 
+              const jobIdKey = String(getIdValue(jobRecord) ?? `row-${index}`);
+
               return (
                 <tr
                   key={jobKey}
                   className="hover:bg-slate-800/50 transition-colors"
                 >
+                  <td className="px-4 py-3 text-sm text-slate-300 whitespace-nowrap">
+                    <input
+                      type="checkbox"
+                      checked={selectedJobIds.includes(jobIdKey)}
+                      onChange={(e) => {
+                        if (!onSelectionChange) return;
+                        const next = new Set(selectedJobIds);
+                        if (e.target.checked) next.add(jobIdKey);
+                        else next.delete(jobIdKey);
+                        onSelectionChange(Array.from(next));
+                      }}
+                    />
+                  </td>
                   <td className="px-4 py-3 text-sm text-slate-300 whitespace-nowrap">
                     {idText}
                   </td>
@@ -455,7 +499,36 @@ export function JobsTable({ jobs, isLoading }: JobsTableProps) {
                     {getProfitabilityBadge(jobRecord) || (
                       <span className="text-slate-500 text-xs">-</span>
                     )}
+                    {predictionType === 'profitability' && (
+                      <></>
+                    )}
                   </td>
+                  {predictionType === 'profitability' && (
+                    <>
+                      <td className="px-4 py-3 text-sm text-slate-100 whitespace-nowrap">
+                        {(() => {
+                          const p = predictions[jobIdKey];
+                          const klass = p?.class ?? jobRecord.profitability?.class ?? jobRecord.profitability_class ?? null;
+                          return klass ? (
+                            <span className="text-sm text-slate-100">{klass}</span>
+                          ) : (
+                            <span className="text-slate-500 text-xs">-</span>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                        {(() => {
+                          const p = predictions[jobIdKey];
+                          const score = p?.confidence ?? p?.probability ?? null;
+                          return typeof score === 'number' ? (
+                            <span className="text-slate-300">{(score * 100).toFixed(0)}%</span>
+                          ) : (
+                            <span className="text-slate-500 text-xs">-</span>
+                          );
+                        })()}
+                      </td>
+                    </>
+                  )}
                 </tr>
               );
             })}

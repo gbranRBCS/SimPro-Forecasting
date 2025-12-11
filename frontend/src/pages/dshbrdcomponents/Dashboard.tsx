@@ -1,25 +1,18 @@
 import { useState, useEffect, useRef } from 'react';
 import { Briefcase } from '../../components/icons';
-import { syncJobs, getJobs, predict } from '../../features/jobs/api';
+import { syncJobs, getJobs, predictProfitability, predictDuration } from '../../features/jobs/api';
+import type { Prediction as ApiPrediction } from '../../features/jobs/api';
 import { Toolbar } from './Toolbar';
 import { JobsTable } from './JobsTable';
+import { PredictionPanel } from './PredictionPanel';
 import { Pagination } from './Pagination';
 import {
   StatusAlert,
   SyncProgressCard,
-  PredictionSummary,
 } from './StatusCards';
 
 type ApiJob = Record<string, any>;
-
-type Prediction = {
-  jobId: string | number;
-  class?: string;
-  confidence?: number;
-  probability?: number;
-  margin_est?: number;
-  [key: string]: any;
-};
+type Prediction = ApiPrediction;
 
 type FilterState = {
   fromDate: string;
@@ -144,9 +137,18 @@ export function Dashboard() {
     text: string;
     type: 'success' | 'error' | 'info';
   } | null>(null);
-  const [predictionSummary, setPredictionSummary] =
+  const [, setPredictionSummary] =
     useState<PredictionSummaryData | null>(null);
+  const [predictionType, setPredictionType] = useState<'profitability' | 'duration' |'none'>('profitability');
+  const [selectedJobIds, setSelectedJobIds] = useState<Array<string>>([]);
+  const [profitabilityPredictions, setProfitabilityPredictions] = useState<Record<string, Prediction>>({});
+  const [predictionLoading, setPredictionLoading] = useState(false);
+  const [predictionError, setPredictionError] = useState<string | null>(null);
+  const [durationPredictions, setDurationPredictions] = useState<Record<string, Prediction>>({});
+  const [durationPredictionLoading, setDurationPredictionLoading] = useState(false);
+  const [durationPredictionError, setDurationPredictionError] = useState<string | null>(null);
   const cachedJobsRef = useRef<ApiJob[]>([]);
+
 
   const updateCache = (items: ApiJob[] | undefined | null) => {
     if (Array.isArray(items) && items.length > 0) {
@@ -321,159 +323,94 @@ export function Dashboard() {
     }
   };
 
-  const handlePredict = async () => {
-    setIsLoading(true);
+  // run predictions for currently selected jobs
+  const runProfitabilityPrediction = async () => {
+    setPredictionLoading(true);
+    setPredictionError(null);
     setStatusMessage(null);
     setPredictionSummary(null);
 
     try {
-  // send currently loaded jobs in request body for prediction
-      const seenIds = new Set<string>();
-      const jobIds = jobs
-        .map((job) => {
-          const id = job?.ID ?? job?.id ?? null;
-          if (id === null || id === undefined) return null;
-          const key = String(id);
-          if (seenIds.has(key)) return null;
-          seenIds.add(key);
-          return id;
-        })
-        .filter((id): id is string | number => id !== null);
-
-      if (jobIds.length === 0) {
-        throw new Error('No job identifiers available to request predictions');
+      if (!selectedJobIds || selectedJobIds.length === 0) {
+        throw new Error('Select one or more jobs to run predictions');
       }
 
-      const response = await predict({ jobIds });
+      const response = await predictProfitability({ jobIds: selectedJobIds });
       const preds: Prediction[] = response?.predictions ?? [];
 
-      // map predictions back to jobs using uppercase ID field
-      const byId = new Map(preds.map((p) => [p.jobId, p]));
-      const updatedJobs = jobs.map((j) => {
-        const p = byId.get(j.ID) as Prediction | undefined;
-        if (!p) return j;
-
-        // determine class from prediction (trained model or fallback)
-        const klass: string | null =
-          (p.class as string) ??
-          (typeof p.margin_est === 'number'
-            ? p.margin_est >= 0.1
-              ? 'High'
-              : p.margin_est >= 0.03
-              ? 'Medium'
-              : 'Low'
-            : null);
-
-        // determine score type and value
-        const scoreType =
-          typeof p.confidence === 'number'
-            ? 'confidence'
-            : typeof p.probability === 'number'
-            ? 'probability'
-            : typeof p.margin_est === 'number'
-            ? 'margin'
-            : null;
-
-        const score =
-          (typeof p.confidence === 'number' && p.confidence) ||
-          (typeof p.probability === 'number' && p.probability) ||
-          (typeof p.margin_est === 'number' && p.margin_est) ||
-          null;
-
-        return {
-          ...j,
-          profitability: {
-            class:
-              klass ??
-              j.profitability?.class ??
-              j.profitability_class ??
-              null,
-            score,
-            scoreType,
-          },
-        };
+      // normalize into map keyed by string job id
+      const map: Record<string, Prediction> = {};
+      preds.forEach((p) => {
+        const key = p.jobId == null ? '' : String(p.jobId);
+        map[key] = p;
       });
 
-      setJobs(updatedJobs);
+      setProfitabilityPredictions((prev) => ({ ...prev, ...map }));
 
-      // calculate summary statistics
-      const getClass = (p: any): string | null => {
-        if (p?.class) return p.class;
-        if (typeof p?.margin_est === 'number') {
-          return p.margin_est >= 0.1
-            ? 'High'
-            : p.margin_est >= 0.03
-            ? 'Medium'
-            : 'Low';
-        }
-        return null;
-      };
-
+      // compute summary
       const classes = preds
-        .map((p: any) => getClass(p))
+        .map((p) => p.class ?? (typeof p.margin_est === 'number' ? (p.margin_est >= 0.1 ? 'High' : p.margin_est >= 0.03 ? 'Medium' : 'Low') : null))
         .filter(Boolean) as string[];
+
       const highCount = classes.filter((c) => c === 'High').length;
       const mediumCount = classes.filter((c) => c === 'Medium').length;
       const lowCount = classes.filter((c) => c === 'Low').length;
       const count = classes.length;
 
       const confidences = preds
-        .map((p: any) =>
-          typeof p.confidence === 'number'
-            ? p.confidence
-            : typeof p.probability === 'number'
-            ? p.probability
-            : null
-        )
-        .filter((x: number | null) => typeof x === 'number') as number[];
+        .map((p) => (typeof p.confidence === 'number' ? p.confidence : typeof p.probability === 'number' ? p.probability : null))
+        .filter((v): v is number => typeof v === 'number');
 
       const avgConfidence =
         confidences.length > 0
           ? confidences.reduce((a, b) => a + b, 0) / confidences.length
           : undefined;
 
-      setPredictionSummary({
-        highCount,
-        mediumCount,
-        lowCount,
-        count,
-        avgConfidence,
-      });
-
-      setStatusMessage({
-        text: `Predicted profitability for ${count} jobs`,
-        type: 'success',
-      });
+      setPredictionSummary({ highCount, mediumCount, lowCount, count, avgConfidence });
+      setStatusMessage({ text: `Predicted profitability for ${count} jobs`, type: 'success' });
     } catch (error: any) {
-      // extract detailed error from backend response
-      const respData = error?.response?.data;
-      let errorMsg = 'Prediction failed';
-
-      if (respData) {
-        const parts: string[] = [];
-        const baseMsg = respData.error || respData.message;
-        if (baseMsg) parts.push(baseMsg);
-        if (respData.mlStatus) parts.push(`ML status ${respData.mlStatus}`);
-        if (respData.mlBody) {
-          if (typeof respData.mlBody === 'string') {
-            parts.push(respData.mlBody);
-          } else if (respData.mlBody?.error || respData.mlBody?.message) {
-            parts.push(respData.mlBody.error || respData.mlBody.message);
-          }
-        }
-        errorMsg = parts.length > 0 ? parts.join(' - ') : errorMsg;
-      } else if (error?.message) {
-        errorMsg = error.message;
-      }
-
-      setStatusMessage({
-        text: errorMsg,
-        type: 'error',
-      });
-      setPredictionSummary(null);
+      setPredictionError(error?.message || 'Prediction failed');
+      setStatusMessage({ text: error?.message || 'Prediction failed', type: 'error' });
     } finally {
-      setIsLoading(false);
+      setPredictionLoading(false);
     }
+  };
+
+  const runDurationPrediction = async () => {
+    setPredictionLoading(true);
+    setPredictionError(null);
+    setStatusMessage(null);
+
+    try {
+    if (!selectedJobIds || selectedJobIds.length === 0) {
+      throw new Error('Select one or more jobs to run predictions');
+    }
+
+    const response = await predictDuration({ jobIds: selectedJobIds });
+    const preds = response?.predictions ?? [];
+
+    // normalize into map, key - job id
+    const map: Record<string, any> = {};
+    preds.forEach((p: any) => {
+      const key = p.jobId == null ? '' : String(p.jobId);
+      map[key] = p;
+    });
+
+    setDurationPredictions((prev) => ({ ...prev, ...map }));
+
+    setStatusMessage({ 
+      text: `Predicted completion time for ${preds.length} jobs`, 
+      type: 'success' 
+    });
+  } catch (error: any) {
+    setPredictionError(error?.message || 'Duration prediction failed');
+    setStatusMessage({ 
+      text: error?.message || 'Duration prediction failed', 
+      type: 'error' 
+    });
+  } finally {
+    setPredictionLoading(false);
+  }
   };
 
   const handlePageChange = (newPage: number) => {
@@ -491,6 +428,16 @@ export function Dashboard() {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pagination.page, pagination.pageSize]);
+
+  const handlePredict = async () => {
+    if (predictionType === 'profitability') {
+      await runProfitabilityPrediction();
+    } else if (predictionType === 'duration') {
+      await runDurationPrediction();
+    } else {
+      console.warn('No prediction type selected');
+    }
+  };
 
   return (
     <div className="min-h-screen bg-slate-950">
@@ -513,7 +460,6 @@ export function Dashboard() {
         onFilterChange={setFilters}
         onSync={handleSync}
         onLoadJobs={() => loadJobs()}
-        onPredict={handlePredict}
         isSyncing={isSyncing}
         isLoading={isLoading}
       />
@@ -528,11 +474,14 @@ export function Dashboard() {
 
             {isSyncing && <SyncProgressCard />}
 
-            {predictionSummary && (
-              <PredictionSummary summary={predictionSummary} />
-            )}
-
-            <JobsTable jobs={jobs} isLoading={isLoading} />
+            <JobsTable
+              jobs={jobs}
+              isLoading={isLoading}
+              selectedJobIds={selectedJobIds}
+              onSelectionChange={(ids) => setSelectedJobIds(ids)}
+              predictions={profitabilityPredictions}
+              predictionType={predictionType}
+            />
 
             <Pagination
               pagination={pagination}
@@ -544,22 +493,15 @@ export function Dashboard() {
 
           {/* Right Panel - Predictions and Visualizations */}
           <div className="space-y-4">
-            <div className="bg-slate-900/50 border border-slate-800 rounded-lg p-6">
-              <h2 className="text-xl font-semibold text-slate-100 mb-2">
-                Predictions & Visualizations
-              </h2>
-              <p className="text-sm text-slate-400">
-                This panel will display prediction results and data visualizations.
-              </p>
-              <div className="mt-6 border-t border-slate-800 pt-6">
-                <div className="text-center text-slate-500 py-12">
-                  <p className="text-lg font-medium mb-2">Coming Soon</p>
-                  <p className="text-sm">
-                    Prediction models and interactive charts will appear here.
-                  </p>
-                </div>
-              </div>
-            </div>
+            <PredictionPanel
+              predictionType={predictionType}
+              selectedJobs={jobs.filter((j) => selectedJobIds.includes(String(j.ID ?? j.id ?? '')))}
+              predictions={predictionType === 'profitability' ? profitabilityPredictions : durationPredictions}
+              loading={predictionLoading}
+              error={predictionError}
+              onPredict={handlePredict}
+              onPredictionTypeChange={(t: 'profitability' | 'duration' |'none') => setPredictionType(t)}
+            />
           </div>
         </div>
       </main>

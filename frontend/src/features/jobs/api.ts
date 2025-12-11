@@ -35,7 +35,7 @@ export async function getJobs(params: any) {
 }
 
 
-export async function predict(body: Record<string, any>) {
+export async function predictProfitability(body: Record<string, any>) {
   const payload: Record<string, any> = {};
   Object.entries(body || {}).forEach(([key, value]) => {
     if (value === undefined) return;
