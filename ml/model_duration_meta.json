@@ -1,9 +1,9 @@
 {
   "model_name": "RandomForestRegressor",
   "metrics": {
-    "MAE": 2.373063063063063,
-    "RMSE": 3.8347749345690154,
-    "R2": 0.07166707297078545
+    "MAE": 1.5896811594202893,
+    "RMSE": 2.5960839702668186,
+    "R2": 0.27052283040246483
   },
   "features": [
     "revenue",
@@ -18,14 +18,15 @@
     "jobType",
     "customerName",
     "siteName",
-    "descriptionText"
+    "date_month",
+    "date_dow"
   ],
-  "use_text": true,
-  "cutoff_date": null,
-  "split_strategy": "random",
-  "n_train": 144,
-  "n_test": 37,
-  "n_samples": 181,
+  "use_text": false,
+  "cutoff_date": "2025-12-15",
+  "split_strategy": "temporal",
+  "n_train": 201,
+  "n_test": 115,
+  "n_samples": 316,
   "max_tfidf_features": 500,
   "rare_top_k": 20
 }

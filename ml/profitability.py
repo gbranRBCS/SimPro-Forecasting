@@ -13,7 +13,7 @@ import joblib
 import pandas as pd
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, RobustScaler
 from sklearn.impute import SimpleImputer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
@@ -29,7 +29,7 @@ MODULE_DIR = os.path.dirname(__file__)
 if MODULE_DIR and MODULE_DIR not in sys.path:
     sys.path.insert(0, MODULE_DIR)
 
-from transformers import RareCategoryCapper
+from transformers import RareCategoryCapper, Log1pTransformer
 
 app = FastAPI(title="ML Service - Profitability", version="1.0.0")
 
@@ -63,7 +63,7 @@ NUMERIC_COLS = [
     "revenue","materials","labour","overhead","cost_total",
     "job_age_days","lead_time_days","is_overdue"
 ]
-CATEGORICAL_COLS = ["statusName","jobType","customerName","siteName"]
+CATEGORICAL_COLS = ["statusName","jobType","customerName","siteName","date_month","date_dow"]
 TEXT_COL = "descriptionText"
 ALL_FEATURES = NUMERIC_COLS + CATEGORICAL_COLS + [TEXT_COL]
 
@@ -298,6 +298,25 @@ def build_dataframe(
             "_id": j.get("ID") or j.get("id"),
             "dateIssued": j.get("dateIssued") or j.get("DateIssued"),
         }
+
+        # enhance with date components
+        dval = row.get("dateIssued")
+        if dval:
+            try:
+                dt = pd.to_datetime(dval)
+                if pd.notnull(dt):
+                    row["date_month"] = dt.strftime("%b")  # Jan, Feb...
+                    row["date_dow"] = dt.strftime("%a")    # Mon, Tue...
+                else:
+                    row["date_month"] = "Unknown"
+                    row["date_dow"] = "Unknown"
+            except Exception:
+                row["date_month"] = "Unknown"
+                row["date_dow"] = "Unknown"
+        else:
+             row["date_month"] = "Unknown"
+             row["date_dow"] = "Unknown"
+
         rows.append(row)
 
         # label handling - prefer provided class, else take from the row (uses fallbacks)
@@ -326,7 +345,8 @@ def build_pipeline(
     numeric_transformer = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
+            ("log", Log1pTransformer()),
+            ("scaler", RobustScaler()),
         ]
     )
     categorical_transformer = Pipeline(
@@ -356,7 +376,7 @@ def build_pipeline(
     lr = LogisticRegression(
         max_iter=1000,
         class_weight="balanced",
-        multinomial="auto",
+        multi_class="multinomial",
         C=C,
     )
     pipe = Pipeline(

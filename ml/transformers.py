@@ -1,5 +1,16 @@
 from sklearn.base import BaseEstimator, TransformerMixin
 import numpy as np
+import pandas as pd
+
+
+class Log1pTransformer(BaseEstimator, TransformerMixin):
+    def fit(self, X, y=None):
+        return self
+
+    def transform(self, X):
+        # apply log1p, ensuring no negative inputs
+        X_new = np.log1p(np.maximum(X, 0))
+        return X_new
 
 
 class RareCategoryCapper(BaseEstimator, TransformerMixin):

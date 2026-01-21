@@ -340,6 +340,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Regenerate ml/train.json via the Node helper before training",
     )
+    parser.add_argument("--user", help="Username for SimPro sync (if rebuilding)")
+    parser.add_argument("--pass", dest="password", help="Password for SimPro sync (if rebuilding)")
+    parser.add_argument("--token", help="JWT Token for SimPro sync (if rebuilding)")
+    
     return parser
 
 
@@ -357,7 +361,14 @@ def main() -> int:
             pass
 
     if args.rebuild:
-        run_command(BUILD_SCRIPT, cwd=repo_root)
+        cmd = list(BUILD_SCRIPT)
+        if args.user:
+            cmd.extend(["--user", args.user])
+        if args.password:
+            cmd.extend(["--pass", args.password])
+        if args.token:
+            cmd.extend(["--token", args.token])
+        run_command(cmd, cwd=repo_root)
     else:
         print("ℹ Using existing ml/train.json (pass --rebuild to regenerate).")
 

@@ -13,13 +13,13 @@ const USER = arg('user');
 const PASS = arg('pass');
 const TOKEN = arg('token');
 const OUT  = arg('out', 'ml/train.json');
-const LOW = Number(arg('low', '0.44'));
-const HIGH = Number(arg('high', '0.64'));
+const ABS_LOW = Number(arg('low', '0.44'));
+const ABS_HIGH = Number(arg('high', '0.64'));
 
 // date-range + limit arguments for historical data sync
 const FROM = arg('from', '2015-01-01');           // default start (very old)
 const TO   = arg('to', '2024-03-31');             // default end: end of 2024 Q1
-const LIMIT = Number(arg('limit', '300'));         // how many jobs to read after syncing
+const LIMIT = Number(arg('limit', '500'));         // how many jobs to read after syncing
 
 function toNum(x) {
   if (x === null || x === undefined) return null;
@@ -27,10 +27,10 @@ function toNum(x) {
   return Number.isFinite(n) ? n : null;
 }
 
-function computeProfitClassFromMargin(p) {
+function computeProfitClassFromMargin(p, low, high) {
   if (p == null) return null;
-  if (p > HIGH) return "High";
-  if (p >= LOW) return "Medium";
+  if (p > high) return "High";
+  if (p >= low) return "Medium";
   return "Low";
 }
 
@@ -50,14 +50,9 @@ function deriveRow(j) {
     netMarginPct = (rev - cost_total) / rev;
   }
 
-  // if still no margin, accept profitability_class 
-  const profitability_class_backend = j.profitability_class ?? null;
 
-  // prefer computed class (ML thresholds) - fall back to backend-provided class only if compute returns null
-  const profitability_class = computeProfitClassFromMargin(netMarginPct) ?? profitability_class_backend;
-
-  // keep only if we have margin || class
-  if (netMarginPct == null && !profitability_class) return null;
+  
+  if (netMarginPct == null && !j.profitability_class) return null;
 
   return {
     ID: j.ID ?? j.id ?? null,
@@ -92,8 +87,19 @@ function deriveRow(j) {
 
     // target variables
     ...(netMarginPct != null ? { netMarginPct } : {}),
-    ...(profitability_class ? { profitability_class } : {})
+    ...(j.profitability_class ? { profitability_class: j.profitability_class } : {})
   };
+}
+
+function quantile(arr, q) {
+  const sorted = arr.slice().sort((a,b) => a - b);
+  const pos = (sorted.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  if (sorted[base + 1] !== undefined) {
+      return sorted[base] + rest * (sorted[base + 1] - sorted[base]);
+  }
+  return sorted[base];
 }
 
 async function main() {
@@ -120,17 +126,50 @@ async function main() {
 
   const jobs = jobsRes.data?.jobs ?? jobsRes.data ?? [];
   const rows = [];
+  
+  const margins = [];
   for (const j of jobs) {
     const r = deriveRow(j);
-    if (r) rows.push(r);
+    if (r) {
+      rows.push(r);
+      if (r.netMarginPct != null) {
+        margins.push(r.netMarginPct);
+      }
+    }
   }
+
+  // calcluatte dynamic thresholds if enough data, else default to predetermined
+  let low = ABS_LOW;
+  let high = ABS_HIGH;
+  
+  if (margins.length > 10) {
+      low = quantile(margins, 0.33);
+      high = quantile(margins, 0.67);
+      console.log(`Computed dynamic thresholds from ${margins.length} margins: Low=${low.toFixed(3)}, High=${high.toFixed(3)}`);
+  } else {
+      console.log(`Using default thresholds: Low=${low}, High=${high}`);
+  }
+
+  let counts = { Low: 0, Medium: 0, High: 0 };
+  
+  for (const r of rows) {
+      if (r.netMarginPct != null) {
+          const cls = computeProfitClassFromMargin(r.netMarginPct, low, high);
+          r.profitability_class = cls;
+          counts[cls] = (counts[cls] || 0) + 1;
+      } else if (r.profitability_class) {
+          counts[r.profitability_class] = (counts[r.profitability_class] || 0) + 1;
+      }
+  }
+
+  console.log('Class distribution:', counts);
 
   const payload = {
     data: rows,
     test_size: 0.2,
     random_state: 42,
     max_tfidf_features: 500,
-    thresholds: { low: LOW, high: HIGH }
+    thresholds: { low, high }
   };
 
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
