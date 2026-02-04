@@ -1,34 +1,45 @@
 import { useState, useEffect, useRef } from 'react';
 import { Briefcase } from '../../components/icons';
-import { syncJobs, getJobs, predictProfitability, predictDuration } from '../../features/jobs/api';
-import type { Prediction as ApiPrediction } from '../../features/jobs/api';
+import {
+  syncJobs,
+  getJobs,
+  predictProfitability,
+  predictDuration,
+} from '../../features/jobs/api';
+import type { 
+  Job, 
+  Prediction, 
+  SyncParams 
+} from '../../features/jobs/api';
+
 import { Toolbar } from './Toolbar';
 import { JobsTable } from './JobsTable';
 import { PredictionPanel } from './PredictionPanel';
 import { Pagination } from './Pagination';
-import {
-  StatusAlert,
-  SyncProgressCard,
-} from './StatusCards';
+import { StatusAlert, SyncProgressCard } from './StatusCards';
 
-type ApiJob = Record<string, any>;
-type Prediction = ApiPrediction;
+// --- Types & Interfaces ---
 
+/**
+State for the filter toolbar inputs.
+Values are strings to match HTML input elements.
+ */
 type FilterState = {
-  fromDate: string;
-  toDate: string;
-  minRevenue: string;
-  maxRevenue: string;
+  fromDate: string;     // ISO Date string (YYYY-MM-DD)
+  toDate: string;       // ISO Date string (YYYY-MM-DD)
+  minRevenue: string;   // Numeric string input
+  maxRevenue: string;   // Numeric string input
   order: 'asc' | 'desc';
-  limit: string;
+  limit: string;        // Numeric string input
 };
 
 type PaginationState = {
-  page: number;
-  pageSize: number;
-  totalPages: number;
+  page: number;         // Current page (1-indexed)
+  pageSize: number;     // Items per page
+  totalPages: number;   // Total available pages
 };
 
+// Aggregated statistics from a set of predictions.
 type PredictionSummaryData = {
   highCount: number;
   mediumCount: number;
@@ -38,22 +49,39 @@ type PredictionSummaryData = {
 };
 
 type LoadOptions = {
-  preloadedJobs?: ApiJob[];
-  statusPrefix?: string;
+  // If provided, use these jobs instead of fetching from API
+  preloadedJobs?: Job[]; 
+  // Message to display on successful load (e.g. "Sync complete")
+  statusPrefix?: string; 
 };
 
-function getRevenueValue(job: ApiJob): number | null {
+type StatusMessage = {
+  text: string;
+  type: 'success' | 'error' | 'info';
+};
+
+
+// --- Helper Functions ---
+
+/**
+Extracts a numeric revenue value from a job object.
+Handles different formats SimPRO might return (direct number, string, or nested object).
+ */
+function getRevenueValue(job: Job): number | null {
   if (!job) return null;
 
-  const direct = job.revenue;
-  if (typeof direct === 'number' && Number.isFinite(direct)) {
-    return direct;
+  // 1. Check direct revenue field
+  if (typeof job.revenue === 'number' && Number.isFinite(job.revenue)) {
+    return job.revenue;
   }
 
+  // 2. Check nested Total.IncTax
   const incTax = job?.Total?.IncTax;
   if (typeof incTax === 'number' && Number.isFinite(incTax)) {
     return incTax;
   }
+  
+  // 3. Try parsing string value
   if (typeof incTax === 'string') {
     const parsed = Number(incTax);
     if (Number.isFinite(parsed)) return parsed;
@@ -62,17 +90,23 @@ function getRevenueValue(job: ApiJob): number | null {
   return null;
 }
 
+/**
+Filters and sorts jobs client-side.
+Used when we have preloaded data (e.g., after a sync) or are using cached data fallback.
+ */
 function filterJobsLocally(
-  jobs: ApiJob[],
+  jobs: Job[],
   filters: FilterState,
   page: number,
   pageSize: number,
 ) {
+  // Ensure valid pagination params
   const safePage = page && page > 0 ? page : 1;
   const safePageSize = pageSize && pageSize > 0 ? pageSize : jobs.length || 1;
 
   let filtered = Array.isArray(jobs) ? [...jobs] : [];
 
+  // Filter: Min Revenue
   if (filters.minRevenue) {
     const min = Number(filters.minRevenue);
     if (!Number.isNaN(min)) {
@@ -83,6 +117,7 @@ function filterJobsLocally(
     }
   }
 
+  // Filter: Max Revenue
   if (filters.maxRevenue) {
     const max = Number(filters.maxRevenue);
     if (!Number.isNaN(max)) {
@@ -93,28 +128,41 @@ function filterJobsLocally(
     }
   }
 
+  // Sort: Revenue
   filtered.sort((a, b) => {
     const revA = getRevenueValue(a);
     const revB = getRevenueValue(b);
+    
+    // Sort logic handles nulls by pushing them to the end
     const fallback = filters.order === 'desc' ? -Infinity : Infinity;
     const valA = revA != null ? revA : fallback;
     const valB = revB != null ? revB : fallback;
 
     if (valA === valB) return 0;
+    
+    // Toggle direction
     if (filters.order === 'desc') return valA > valB ? -1 : 1;
     return valA > valB ? 1 : -1;
   });
 
+  // Paginate
   const start = (safePage - 1) * safePageSize;
-  const paged = start >= 0 ? filtered.slice(start, start + safePageSize) : filtered.slice(0, safePageSize);
+  const paged = start >= 0 
+    ? filtered.slice(start, start + safePageSize) 
+    : filtered.slice(0, safePageSize);
 
   const total = filtered.length;
-  const totalPages = safePageSize > 0 ? Math.max(1, Math.ceil(total / safePageSize)) : 1;
+  const totalPages = safePageSize > 0 
+    ? Math.max(1, Math.ceil(total / safePageSize)) 
+    : 1;
 
   return { jobs: paged, total, totalPages };
 }
 
+// --- Main Component ---
+
 export function Dashboard() {
+  // -- State: UI & Data --
   const [filters, setFilters] = useState<FilterState>({
     fromDate: '',
     toDate: '',
@@ -130,33 +178,47 @@ export function Dashboard() {
     totalPages: 1,
   });
 
-  const [jobs, setJobs] = useState<ApiJob[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [statusMessage, setStatusMessage] = useState<StatusMessage | null>(null);
+  
+  // -- State: Loading Flags --
   const [isLoading, setIsLoading] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
-  const [statusMessage, setStatusMessage] = useState<{
-    text: string;
-    type: 'success' | 'error' | 'info';
-  } | null>(null);
-  const [, setPredictionSummary] =
-    useState<PredictionSummaryData | null>(null);
+  
+  // -- State: Predictions --
+  const [, setPredictionSummary] = useState<PredictionSummaryData | null>(null);
   const [predictionType, setPredictionType] = useState<'profitability' | 'duration' |'none'>('profitability');
+  
   const [selectedJobIds, setSelectedJobIds] = useState<Array<string>>([]);
+  
+  // Profitability Prediction State
   const [profitabilityPredictions, setProfitabilityPredictions] = useState<Record<string, Prediction>>({});
   const [predictionLoading, setPredictionLoading] = useState(false);
   const [predictionError, setPredictionError] = useState<string | null>(null);
+  
+  // Duration Prediction State
   const [durationPredictions, setDurationPredictions] = useState<Record<string, Prediction>>({});
-  const [durationPredictionLoading, setDurationPredictionLoading] = useState(false);
-  const [durationPredictionError, setDurationPredictionError] = useState<string | null>(null);
-  const cachedJobsRef = useRef<ApiJob[]>([]);
+  const [, setDurationPredictionLoading] = useState(false); // Unused currently
+  const [, setDurationPredictionError] = useState<string | null>(null); // Unused currently
+
+  // -- Refs --
+  // Cache fetched jobs to allow client-side filtering without re-fetching
+  const cachedJobsRef = useRef<Job[]>([]);
 
 
-  const updateCache = (items: ApiJob[] | undefined | null) => {
+  // -- Methods --
+
+  const updateCache = (items: Job[] | undefined | null) => {
     if (Array.isArray(items) && items.length > 0) {
       cachedJobsRef.current = items;
     }
   };
 
-   const loadJobs = async (
+  /**
+  Main data loading function.
+  Can load from API or use preloaded data (e.g. from Sync result).
+  */
+  const loadJobs = async (
     newPage?: number,
     newPageSize?: number,
     options?: LoadOptions,
@@ -165,21 +227,21 @@ export function Dashboard() {
     const sizeToLoad = newPageSize ?? pagination.pageSize;
     const hasPreloaded = Array.isArray(options?.preloadedJobs);
 
+    // Only set loading to true if we are actually fetching over network
     if (!hasPreloaded) {
       setIsLoading(true);
-    } else {
-      setIsLoading(false);
     }
 
     setStatusMessage(null);
     setPredictionSummary(null);
 
     try {
-      let jobsData: ApiJob[] = [];
+      let jobsData: Job[] = [];
       let totalPages = 1;
       let totalCount = 0;
       let usedCachedFallback = false;
 
+      // Case A: Use preloaded data (e.g. from Sync)
       if (hasPreloaded && options?.preloadedJobs) {
         updateCache(options.preloadedJobs);
         const local = filterJobsLocally(
@@ -191,7 +253,9 @@ export function Dashboard() {
         jobsData = local.jobs;
         totalPages = local.totalPages;
         totalCount = local.total;
-      } else {
+      } 
+      // Case B: Fetch from API
+      else {
         const params: any = {
           sortField: 'revenue',
           order: filters.order,
@@ -217,12 +281,16 @@ export function Dashboard() {
         const reportedTotal =
           typeof data?.total === 'number' ? data.total : fetchedJobs.length;
 
+        // Smart caching:
+        // If we fetched new data, use it & update cache.
         if (fetchedJobs.length > 0) {
           updateCache(fetchedJobs);
           jobsData = fetchedJobs;
           totalPages = data?.totalPages ?? 1;
           totalCount = reportedTotal;
-        } else if (cachedJobsRef.current.length > 0) {
+        } 
+        // If API returned nothing but we have cache (e.g. offline/error fallback scenario)
+        else if (cachedJobsRef.current.length > 0) {
           const fallback = filterJobsLocally(
             cachedJobsRef.current,
             filters,
@@ -233,10 +301,12 @@ export function Dashboard() {
           totalPages = fallback.totalPages;
           totalCount = fallback.total;
           usedCachedFallback = true;
-        } else {
-          jobsData = fetchedJobs;
-          totalPages = data?.totalPages ?? 1;
-          totalCount = reportedTotal;
+        } 
+        // No data anywhere
+        else {
+          jobsData = [];
+          totalPages = 1;
+          totalCount = 0;
         }
       }
 
@@ -248,22 +318,22 @@ export function Dashboard() {
         totalPages: totalPages > 0 ? totalPages : 1,
       }));
 
+      // Construct a user-friendly status message
       const showingCount = jobsData.length;
-      const totalForMessage =
-        totalCount > 0 ? totalCount : showingCount;
-
+      const totalForMessage = totalCount > 0 ? totalCount : showingCount;
       let messageText: string;
+
       if (options?.statusPrefix) {
-        const countText =
-          totalForMessage > showingCount
-            ? `${showingCount} of ${totalForMessage}`
-            : `${showingCount}`;
+        // "Sync complete · Showing 50 of 200 jobs"
+        const countText = totalForMessage > showingCount
+          ? `${showingCount} of ${totalForMessage}`
+          : `${showingCount}`;
         messageText = `${options.statusPrefix} · Showing ${countText} jobs`;
       } else if (usedCachedFallback) {
-        const countText =
-          totalForMessage > showingCount
-            ? `${showingCount} of ${totalForMessage}`
-            : `${showingCount}`;
+        // "Showing cached jobs · 50 of 200 jobs"
+        const countText = totalForMessage > showingCount
+          ? `${showingCount} of ${totalForMessage}`
+          : `${showingCount}`;
         messageText = `Showing cached jobs · ${countText} jobs`;
       } else if (totalForMessage > showingCount) {
         messageText = `Loaded ${showingCount} of ${totalForMessage} jobs`;
@@ -275,6 +345,7 @@ export function Dashboard() {
         text: messageText,
         type: 'success',
       });
+
     } catch (error: any) {
       const errorMsg =
         error?.response?.data?.error ||
@@ -290,27 +361,33 @@ export function Dashboard() {
     }
   };
 
+  /**
+  Triggers a sync with the backend SimPRO service.
+   */
   const handleSync = async (mode: 'update' | 'full' = 'update') => {
     setIsSyncing(true);
     setStatusMessage(null);
     setPredictionSummary(null);
 
     try {
-      const params: { from?: string; to?: string; mode: 'update' | 'full' } = {
-        mode,
-      };
+      // Prepare Sync Params
+      const params: SyncParams = { mode };
+      
       if (mode === 'update') {
         if (filters.fromDate) params.from = filters.fromDate;
         if (filters.toDate) params.to = filters.toDate;
       }
 
       const data = await syncJobs(params);
-      const syncedJobs = Array.isArray(data?.jobs) ? data.jobs : undefined;
+      
+      // If sync returns jobs immediately, use them to populate the table (avoids a second call of loadJobs)
+      const syncedJobs = Array.isArray(data?.jobs) ? data.jobs as Job[] : undefined;
 
       await loadJobs(1, pagination.pageSize, {
         preloadedJobs: syncedJobs,
         statusPrefix: data?.message || 'Sync complete',
       });
+
     } catch (error: any) {
       const errorMsg =
         error?.response?.data?.error || error?.message || 'Sync failed';
@@ -323,7 +400,9 @@ export function Dashboard() {
     }
   };
 
-  // run predictions for currently selected jobs
+  /**
+  Runs the profitability ML model on selected jobs.
+   */
   const runProfitabilityPrediction = async () => {
     setPredictionLoading(true);
     setPredictionError(null);
@@ -338,7 +417,7 @@ export function Dashboard() {
       const response = await predictProfitability({ jobIds: selectedJobIds });
       const preds: Prediction[] = response?.predictions ?? [];
 
-      // normalize into map keyed by string job id
+      // Normalize into map keyed by specific Job ID string
       const map: Record<string, Prediction> = {};
       preds.forEach((p) => {
         const key = p.jobId == null ? '' : String(p.jobId);
@@ -347,9 +426,21 @@ export function Dashboard() {
 
       setProfitabilityPredictions((prev) => ({ ...prev, ...map }));
 
-      // compute summary
+      // --- Calculate Summary Stats ---
+      
+      // Determine class (High/Medium/Low) - prefer model output, fallback to heuristic
       const classes = preds
-        .map((p) => p.class ?? (typeof p.margin_est === 'number' ? (p.margin_est >= 0.1 ? 'High' : p.margin_est >= 0.03 ? 'Medium' : 'Low') : null))
+        .map((p) => {
+          if (p.class) return p.class;
+          
+          // Legacy heuristic fallback
+          if (typeof p.margin_est === 'number') {
+            if (p.margin_est >= 0.1) return 'High';
+            if (p.margin_est >= 0.03) return 'Medium';
+            return 'Low';
+          }
+          return null;
+        })
         .filter(Boolean) as string[];
 
       const highCount = classes.filter((c) => c === 'High').length;
@@ -357,17 +448,22 @@ export function Dashboard() {
       const lowCount = classes.filter((c) => c === 'Low').length;
       const count = classes.length;
 
+      // Calculate confidence average
       const confidences = preds
         .map((p) => (typeof p.confidence === 'number' ? p.confidence : typeof p.probability === 'number' ? p.probability : null))
         .filter((v): v is number => typeof v === 'number');
 
-      const avgConfidence =
-        confidences.length > 0
+      const avgConfidence = confidences.length > 0
           ? confidences.reduce((a, b) => a + b, 0) / confidences.length
           : undefined;
 
       setPredictionSummary({ highCount, mediumCount, lowCount, count, avgConfidence });
-      setStatusMessage({ text: `Predicted profitability for ${count} jobs`, type: 'success' });
+      
+      setStatusMessage({ 
+        text: `Predicted profitability for ${count} jobs`, 
+        type: 'success' 
+      });
+
     } catch (error: any) {
       setPredictionError(error?.message || 'Prediction failed');
       setStatusMessage({ text: error?.message || 'Prediction failed', type: 'error' });
@@ -376,41 +472,43 @@ export function Dashboard() {
     }
   };
 
+  /**
+   * Runs the duration (completion time) ML model on selected jobs.
+   */
   const runDurationPrediction = async () => {
     setPredictionLoading(true);
     setPredictionError(null);
     setStatusMessage(null);
 
     try {
-    if (!selectedJobIds || selectedJobIds.length === 0) {
-      throw new Error('Select one or more jobs to run predictions');
+      if (!selectedJobIds || selectedJobIds.length === 0) {
+        throw new Error('Select one or more jobs to run predictions');
+      }
+
+      const response = await predictDuration({ jobIds: selectedJobIds });
+      const preds = response?.predictions ?? [];
+
+      const map: Record<string, Prediction> = {};
+      preds.forEach((p: Prediction) => {
+        const key = p.jobId == null ? '' : String(p.jobId);
+        map[key] = p;
+      });
+
+      setDurationPredictions((prev) => ({ ...prev, ...map }));
+
+      setStatusMessage({ 
+        text: `Predicted completion time for ${preds.length} jobs`, 
+        type: 'success' 
+      });
+    } catch (error: any) {
+      setPredictionError(error?.message || 'Duration prediction failed');
+      setStatusMessage({ 
+        text: error?.message || 'Duration prediction failed', 
+        type: 'error' 
+      });
+    } finally {
+      setPredictionLoading(false);
     }
-
-    const response = await predictDuration({ jobIds: selectedJobIds });
-    const preds = response?.predictions ?? [];
-
-    // normalize into map, key - job id
-    const map: Record<string, any> = {};
-    preds.forEach((p: any) => {
-      const key = p.jobId == null ? '' : String(p.jobId);
-      map[key] = p;
-    });
-
-    setDurationPredictions((prev) => ({ ...prev, ...map }));
-
-    setStatusMessage({ 
-      text: `Predicted completion time for ${preds.length} jobs`, 
-      type: 'success' 
-    });
-  } catch (error: any) {
-    setPredictionError(error?.message || 'Duration prediction failed');
-    setStatusMessage({ 
-      text: error?.message || 'Duration prediction failed', 
-      type: 'error' 
-    });
-  } finally {
-    setPredictionLoading(false);
-  }
   };
 
   const handlePageChange = (newPage: number) => {
@@ -421,7 +519,7 @@ export function Dashboard() {
     setPagination((prev) => ({ ...prev, page: 1, pageSize: newPageSize }));
   };
 
-  // auto-load when page or pageSize changes
+  // Reload jobs when pagination changes
   useEffect(() => {
     if (pagination.pageSize > 0) {
       loadJobs(pagination.page, pagination.pageSize);
@@ -429,6 +527,7 @@ export function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pagination.page, pagination.pageSize]);
 
+  // Handler for the "Predict" button click
   const handlePredict = async () => {
     if (predictionType === 'profitability') {
       await runProfitabilityPrediction();

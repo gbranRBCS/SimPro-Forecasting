@@ -1,5 +1,15 @@
 import { AlertCircle, CheckCircle, Loader2, TrendingUp } from '../../components/icons';
 
+/**
+STATUS CARDS & ALERTS
+---------------------
+Small, reusable UI components for displaying status, errors, and progress.
+Includes:
+ - StatusAlert: Generic success/error/info banner.
+ - SyncProgressCard: Specific loading state for the SimPRO sync.
+ - PredictionSummary: A mini-dashboard for profitability metrics (Legacy/Optional).
+*/
+
 interface StatusAlertProps {
   message: string;
   type: 'success' | 'error' | 'info';
@@ -37,6 +47,12 @@ export function StatusAlert({ message, type }: StatusAlertProps) {
   );
 }
 
+/**
+Shows a loading spinner specifically for the SimPRO sync process.
+
+SimPRO's API defaults to 30 jobs per page and has strict rate limits.
+Syncing thousands of jobs can take minutes, so we need to set expectations.
+ */
 export function SyncProgressCard() {
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl px-6 py-4">
@@ -47,7 +63,7 @@ export function SyncProgressCard() {
             Sync in progress...
           </p>
           <p className="text-xs text-slate-400 mt-0.5">
-            This can take a few minutes due to rate limits.
+            This can take a few minutes due to SimPRO API rate limits.
           </p>
         </div>
       </div>
@@ -55,7 +71,10 @@ export function SyncProgressCard() {
   );
 }
 
-type PredictionSummaryData = {
+/**
+Helper type for the props of the PredictionSummary component.
+ */
+export type PredictionSummaryData = {
   highCount: number;
   mediumCount: number;
   lowCount: number;
@@ -67,6 +86,9 @@ interface PredictionSummaryProps {
   summary: PredictionSummaryData;
 }
 
+/**
+Displays a quick textual summary of profitability predictions.
+ */
 export function PredictionSummary({ summary }: PredictionSummaryProps) {
   const { highCount, mediumCount, lowCount, count, avgConfidence } = summary;
 

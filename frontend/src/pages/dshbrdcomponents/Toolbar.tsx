@@ -1,18 +1,28 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Filter, RefreshCw, Sparkles, ChevronDown } from '../../components/icons';
 
+/**
+TOOLBAR COMPONENT
+-----------------
+The main center for the Dashboard.
+Responsibilities:
+ - 1. Filtering: Date ranges, revenue thresholds.
+ - 2. Actions: Triggering Sync (Update vs Full) and data loading.
+ */
+
 interface FilterState {
-  fromDate: string;
-  toDate: string;
-  minRevenue: string;
-  maxRevenue: string;
+  fromDate: string; // ISO Date string yyyy-mm-dd
+  toDate: string;   // ISO Date string yyyy-mm-dd
+  minRevenue: string; // Raw input string (e.g. "1000")
+  maxRevenue: string; // Raw input string
   order: 'asc' | 'desc';
-  limit: string;
+  limit: string;    // "All" or a number as string
 }
 
 interface ToolbarProps {
   filters: FilterState;
   onFilterChange: (filters: FilterState) => void;
+  /** 'update' = fetch new/modified. 'full' = re-fetch everything. */
   onSync: (mode: 'update' | 'full') => void;
   onLoadJobs: () => void;
   isSyncing: boolean;
@@ -28,9 +38,12 @@ export function Toolbar({
   isLoading,
 }: ToolbarProps) {
   const isDisabled = isSyncing || isLoading;
+  
+  // -- Sync Dropdown State --
   const [syncMenuOpen, setSyncMenuOpen] = useState(false);
   const syncControlRef = useRef<HTMLDivElement | null>(null);
 
+  // Handle clicking outside the sync menu to close it
   useEffect(() => {
     if (!syncMenuOpen) return;
 
@@ -197,20 +210,24 @@ export function Toolbar({
               <ChevronDown className="w-4 h-4" />
             </button>
             {syncMenuOpen && !isDisabled && (
-              <div className="absolute right-0 top-full mt-2 w-44 rounded-md bg-slate-800 border border-slate-700 shadow-lg ring-1 ring-black/5 focus:outline-none">
+              <div className="absolute right-0 top-full mt-2 w-44 rounded-md bg-slate-800 border border-slate-700 shadow-lg ring-1 ring-black/5 focus:outline-none overflow-hidden z-20">
                 <button
                   type="button"
                   onClick={() => triggerSync('update')}
-                  className="w-full px-4 py-2 text-left text-sm text-slate-100 hover:bg-slate-700 transition-colors"
+                  className="w-full px-4 py-3 text-left hover:bg-slate-700 transition-colors border-b border-slate-700/50"
+                  title="Fetches only modified or new jobs since the last sync date."
                 >
-                  Update sync (recent jobs)
+                  <div className="text-sm font-medium text-slate-100">Update Sync</div>
+                  <div className="text-xs text-slate-400 mt-0.5">Faster. Gets recent changes only.</div>
                 </button>
                 <button
                   type="button"
                   onClick={() => triggerSync('full')}
-                  className="w-full px-4 py-2 text-left text-sm text-slate-100 hover:bg-slate-700 transition-colors rounded-b-md"
+                  className="w-full px-4 py-3 text-left hover:bg-slate-700 transition-colors"
+                  title="Deletes local data and re-downloads everything from SimPRO."
                 >
-                  Full sync (replace all)
+                  <div className="text-sm font-medium text-slate-100">Full Sync</div>
+                  <div className="text-xs text-slate-400 mt-0.5">Slower. Refreshes all data.</div>
                 </button>
               </div>
             )}

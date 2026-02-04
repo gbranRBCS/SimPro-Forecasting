@@ -5,48 +5,104 @@ import { db } from "../db/db.js";
 
 const router = express.Router();
 
+/**
+AUTHENTICATION ROUTES
+Handles user registration and login.
+Uses:
+- bcrypt for secure password hashing.
+- jsonwebtoken (JWT) for session management.
+- SQLite (via better-sqlite3) for user storage.
+ */
+
+// --- Constants ---
+const SALT_ROUNDS = 10;
+const SESSION_DURATION = "2h"; // Tokens expire after 2 hours
+
 
 // POST /auth/register
+// Creates a new user account.
 router.post("/register", async (req, res) => {
   const { username, password, role = "user" } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: "username and password required" });
+
+  // 1. Basic Validation
+  if (!username || !password) {
+    return res.status(400).json({ error: "Username and password are required." });
+  }
 
   try {
-    const hash = await bcrypt.hash(password, 10);
-    const stmt = db.prepare("INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)");
+    // 2. Hash existing password
+    // We never store plain text passwords in the database.
+    const hash = await bcrypt.hash(password, SALT_ROUNDS);
+
+    // 3. Insert into DB
+    const stmt = db.prepare(
+      "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)"
+    );
     stmt.run(username, hash, role);
-    return res.status(201).json({ ok: true });
-  } catch (e) {
-    if (String(e).includes("UNIQUE")) {
-      return res.status(409).json({ error: "username already exists" });
+
+    console.log(`User registered: ${username}`);
+    return res.status(201).json({ ok: true, message: "User registered successfully." });
+
+  } catch (err) {
+    // 4. Handle duplicates
+    if (String(err).includes("UNIQUE")) {
+      return res.status(409).json({ error: "Username is already taken." });
     }
-    console.error("register error:", e);
-    return res.status(500).json({ error: "registration failed" });
+
+    // 5. Build generic error
+    console.error("Registration failed:", err);
+    return res.status(500).json({ error: "Internal server error during registration." });
   }
 });
 
 // POST /auth/login
+// Verifies credentials and issues a JWT token.
 router.post("/login", async (req, res) => {
   const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ error: "username and password required" });
+
+  // 1. Basic input check
+  if (!username || !password) {
+    return res.status(400).json({ error: "Username and password are required." });
+  }
 
   try {
-    const row = db.prepare("SELECT id, username, password_hash, role FROM users WHERE username = ?").get(username);
-    if (!row) return res.status(401).json({ error: "invalid credentials" });
+    // 2. Lookup user
+    const row = db.prepare(
+      "SELECT id, username, password_hash, role FROM users WHERE username = ?"
+    ).get(username);
 
-    const ok = await bcrypt.compare(password, row.password_hash);
-    if (!ok) return res.status(401).json({ error: "invalid credentials" });
+    // If user not found, we return a generic error.
+    if (!row) {
+      return res.status(401).json({ error: "Invalid credentials" }); // (User not found)
+    }
 
+    // 3. Verify password
+    const passwordsMatch = await bcrypt.compare(password, row.password_hash);
+    if (!passwordsMatch) {
+      return res.status(401).json({ error: "Invalid credentials" }); // (Wrong password)
+    }
+
+    // 4. Generate Session Token (JWT)
+    // This token proves identity for subsequent requests.
     const token = jwt.sign(
-      { sub: row.id, username: row.username, role: row.role },
+      { 
+        sub: row.id,        // Subject (User ID)
+        username: row.username, 
+        role: row.role 
+      },
       process.env.JWT_SECRET,
-      { expiresIn: "2h" }
+      { expiresIn: SESSION_DURATION }
     );
 
-    return res.json({ token });
-  } catch (e) {
-    console.error("login error:", e);
-    return res.status(500).json({ error: "login failed" });
+    console.log(`User logged in: ${username}`);
+    return res.json({ 
+      token,
+      user: { username: row.username, role: row.role }
+    });
+
+  } catch (err) {
+    console.error("Login process error:", err);
+    return res.status(500).json({ error: "Login failed due to server error." });
   }
 });
 

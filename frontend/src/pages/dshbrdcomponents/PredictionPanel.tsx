@@ -9,6 +9,7 @@ import {
   Tooltip,
   Legend,
 } from 'chart.js';
+import type { Job, Prediction } from '../../features/jobs/api';
 
 ChartJS.register(
   CategoryScale,
@@ -19,22 +20,25 @@ ChartJS.register(
   Legend
 );
 
-type ApiJob = Record<string, any>;
+/**
+PREDICTION PANEL COMPONENT
+--------------------------
+Displays the results of our ML models.
+It handles two modes:
+ 1. Profitability: Classification (Low/Medium/High) - visualized as a distribution chart.
+ 2. Duration: Regression (Days) - visualized as summary stats (Avg, Min, Max).
 
-type Prediction = {
-  jobId: string | number | null;
-  class?: 'Low' | 'Medium' | 'High';
-  confidence?: number; // 0..1
-};
+Reacts to the user's selection in the main table. If 5 jobs are selected, it shows predictions for those 5 jobs.
+ */
 
 interface PredictionPanelProps {
-  predictionType: 'profitability' | 'duration' |'none';
-  selectedJobs: ApiJob[];
+  predictionType: 'profitability' | 'duration' | 'none';
+  selectedJobs: Job[];
   predictions: Record<string, Prediction>;
   loading: boolean;
   error?: string | null;
   onPredict: () => void;
-  onPredictionTypeChange: (t: 'profitability' | 'duration' |'none') => void;
+  onPredictionTypeChange: (t: 'profitability' | 'duration' | 'none') => void;
 }
 
 export function PredictionPanel({ predictionType, selectedJobs, predictions, loading, error, onPredict, onPredictionTypeChange }: PredictionPanelProps) {
@@ -47,6 +51,8 @@ export function PredictionPanel({ predictionType, selectedJobs, predictions, loa
     );
   }
 
+  // Why this matters: We only enable the "Predict" button if items are actually selected.
+  // This prevents api waste.
   const totalSelected = selectedJobs.length;
 
   // standard header
@@ -58,8 +64,8 @@ export function PredictionPanel({ predictionType, selectedJobs, predictions, loa
           <label className="text-xs text-slate-400">Model</label>
           <select
             value={predictionType}
-            onChange={(e) => onPredictionTypeChange(e.target.value as 'profitability' | 'duration' |'none')}
-            className="px-2 py-1 bg-slate-800 border border-slate-700 rounded-md text-sm text-slate-100"
+            onChange={(e) => onPredictionTypeChange(e.target.value as 'profitability' | 'duration' | 'none')}
+            className="px-2 py-1 bg-slate-800 border border-slate-700 rounded-md text-sm text-slate-100 focus:ring-2 focus:ring-blue-500/50 focus:outline-none"
           >
             <option value="profitability">Profitability</option>
             <option value="duration">Duration</option>
@@ -97,21 +103,25 @@ export function PredictionPanel({ predictionType, selectedJobs, predictions, loa
 }
 
 function DurationView({ predictions, selectedJobs, loading, error }: {
-  predictions: Record<string, any>;
-  selectedJobs: any[];
+  predictions: Record<string, Prediction>;
+  selectedJobs: Job[];
   loading: boolean;
   error?: string | null;
 }) {
   const totalSelected = selectedJobs.length;
+  
+  // Filter for jobs that we actually have a result for.
+  // We match based on normalized IDs
   const predictedJobs = selectedJobs.filter((j) => {
-    const id = String(j.ID ?? j.id ?? '');
+    const id = String(j.id ?? j.ID ?? '');
     return !!predictions[id];
   });
   const predictedCount = predictedJobs.length;
 
+  // Extract pure numbers for stats
   const durations = predictedJobs
     .map((j) => {
-      const id = String(j.ID ?? j.id ?? '');
+      const id = String(j.id ?? j.ID ?? '');
       const pred = predictions[id];
       return pred?.predicted_completion_days;
     })
@@ -176,13 +186,15 @@ function DurationView({ predictions, selectedJobs, loading, error }: {
 
 function ProfitabilityView({ predictions, selectedJobs, loading, error }: {
   predictions: Record<string, Prediction>;
-  selectedJobs: any[];
+  selectedJobs: Job[];
   loading: boolean;
   error?: string | null;
 }) {
   const totalSelected = selectedJobs.length;
+  
+  // Match results to selected jobs
   const predictedJobs = selectedJobs.filter((j) => {
-    const id = String(j.ID ?? j.id ?? '');
+    const id = String(j.id ?? j.ID ?? '');
     return !!predictions[id];
   });
   const predictedCount = predictedJobs.length;
@@ -191,6 +203,7 @@ function ProfitabilityView({ predictions, selectedJobs, loading, error }: {
   let sumConfidence = 0;
   let confCount = 0;
 
+  // Collect results for the chart
   Object.values(predictions).forEach((p) => {
     if (!p) return;
     const k = p.class ?? null;

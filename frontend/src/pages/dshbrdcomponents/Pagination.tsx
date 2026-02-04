@@ -1,6 +1,14 @@
 import { ChevronLeft, ChevronRight } from '../../components/icons';
 
-type PaginationState = {
+/**
+ PAGINATION CONTROL
+ ------------------
+ A simple pagination bar
+ Takes the current state (current page, num of pages)
+ and provides callbacks to change the page or the page size.
+ */
+
+export type PaginationState = {
   page: number;
   pageSize: number;
   totalPages: number;
@@ -10,6 +18,7 @@ interface PaginationProps {
   pagination: PaginationState;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
+  /** Disable controls while data is loading */
   disabled?: boolean;
 }
 
@@ -21,20 +30,32 @@ export function Pagination({
 }: PaginationProps) {
   const { page, pageSize, totalPages } = pagination;
 
+  // -- Handlers --
+
   const handlePrevious = () => {
-    if (page > 1) onPageChange(page - 1);
+    // Don't go below page 1
+    if (page > 1) {
+      onPageChange(page - 1);
+    }
   };
 
   const handleNext = () => {
-    if (page < totalPages) onPageChange(page + 1);
+    // Don't go past the last page
+    if (page < totalPages) {
+      onPageChange(page + 1);
+    }
   };
 
   const handlePageSizeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    onPageSizeChange(Number(e.target.value));
+    // Convert string value from select to number
+    const newSize = Number(e.target.value);
+    onPageSizeChange(newSize);
   };
 
   return (
     <div className="flex items-center justify-between gap-4 px-6 py-4 bg-slate-900 border-t border-slate-800 rounded-b-xl">
+      
+      {/* Page Navigation Buttons */}
       <div className="flex items-center gap-4 whitespace-nowrap">
         <button
           onClick={handlePrevious}
@@ -61,6 +82,7 @@ export function Pagination({
         </button>
       </div>
 
+      {/* Page Size Selector */}
       <div className="flex items-center gap-2 whitespace-nowrap">
         <label htmlFor="pageSize" className="text-sm text-slate-400">
           Per page:
