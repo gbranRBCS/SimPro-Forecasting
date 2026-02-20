@@ -564,9 +564,22 @@ export function Dashboard() {
       />
 
       <main className="px-6 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left Panel - Jobs Table and Controls */}
-          <div className="space-y-4">
+        <div className="flex flex-col gap-6">
+          {/* Top Panel - Predictions and Visualizations */}
+          <div className="w-full">
+            <PredictionPanel
+              predictionType={predictionType}
+              selectedJobs={jobs.filter((j) => selectedJobIds.includes(String(j.ID ?? j.id ?? '')))}
+              predictions={predictionType === 'profitability' ? profitabilityPredictions : durationPredictions}
+              loading={predictionLoading}
+              error={predictionError}
+              onPredict={handlePredict}
+              onPredictionTypeChange={(t: 'profitability' | 'duration' | 'none') => setPredictionType(t)}
+            />
+          </div>
+
+          {/* Bottom Panel - Jobs Table and Controls */}
+          <div className="space-y-4 w-full">
             {statusMessage && (
               <StatusAlert message={statusMessage.text} type={statusMessage.type} />
             )}
@@ -578,7 +591,7 @@ export function Dashboard() {
               isLoading={isLoading}
               selectedJobIds={selectedJobIds}
               onSelectionChange={(ids) => setSelectedJobIds(ids)}
-              predictions={profitabilityPredictions}
+              predictions={predictionType === 'duration' ? durationPredictions : profitabilityPredictions}
               predictionType={predictionType}
             />
 
@@ -587,19 +600,6 @@ export function Dashboard() {
               onPageChange={handlePageChange}
               onPageSizeChange={handlePageSizeChange}
               disabled={isLoading || isSyncing}
-            />
-          </div>
-
-          {/* Right Panel - Predictions and Visualizations */}
-          <div className="space-y-4">
-            <PredictionPanel
-              predictionType={predictionType}
-              selectedJobs={jobs.filter((j) => selectedJobIds.includes(String(j.ID ?? j.id ?? '')))}
-              predictions={predictionType === 'profitability' ? profitabilityPredictions : durationPredictions}
-              loading={predictionLoading}
-              error={predictionError}
-              onPredict={handlePredict}
-              onPredictionTypeChange={(t: 'profitability' | 'duration' |'none') => setPredictionType(t)}
             />
           </div>
         </div>

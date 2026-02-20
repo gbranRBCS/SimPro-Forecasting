@@ -148,35 +148,40 @@ function DurationView({ predictions, selectedJobs, loading, error }: {
         <p className="text-sm text-slate-400">Click "Predict" to run completion time predictions.</p>
       ) : (
         <div>
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-6">
             <div className="text-sm text-slate-300">Selected: <strong>{totalSelected}</strong></div>
             <div className="text-sm text-slate-300">Predicted: <strong>{predictedCount}</strong></div>
           </div>
 
           {/* Statistics Cards */}
-          <div className="grid grid-cols-3 gap-3 mb-4">
-            <div className="bg-slate-800/50 rounded-lg p-3">
-              <div className="text-xs text-slate-400 mb-1">Average</div>
-              <div className="text-lg font-semibold text-slate-100">
-                {avgDuration != null ? `${avgDuration.toFixed(1)} days` : '—'}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+            <div className="bg-slate-800/50 rounded-lg p-6 flex flex-col items-center justify-center text-center border border-slate-700/50">
+              <div className="text-sm font-medium text-slate-400 mb-2 uppercase tracking-wide">Average Duration</div>
+              <div className="text-3xl font-bold text-slate-100">
+                {avgDuration != null ? `${avgDuration.toFixed(1)}` : '—'}
+                <span className="text-lg font-normal text-slate-400 ml-1">days</span>
               </div>
             </div>
-            <div className="bg-slate-800/50 rounded-lg p-3">
-              <div className="text-xs text-slate-400 mb-1">Shortest</div>
-              <div className="text-lg font-semibold text-green-400">
-                {minDuration != null ? `${minDuration.toFixed(1)} days` : '—'}
+            
+            <div className="bg-slate-800/50 rounded-lg p-6 flex flex-col items-center justify-center text-center border border-green-900/20">
+              <div className="text-sm font-medium text-slate-400 mb-2 uppercase tracking-wide">Shortest Estimate</div>
+              <div className="text-3xl font-bold text-green-400">
+                {minDuration != null ? `${minDuration.toFixed(1)}` : '—'}
+                <span className="text-lg font-normal text-slate-500/80 ml-1">days</span>
               </div>
             </div>
-            <div className="bg-slate-800/50 rounded-lg p-3">
-              <div className="text-xs text-slate-400 mb-1">Longest</div>
-              <div className="text-lg font-semibold text-red-400">
-                {maxDuration != null ? `${maxDuration.toFixed(1)} days` : '—'}
+            
+            <div className="bg-slate-800/50 rounded-lg p-6 flex flex-col items-center justify-center text-center border border-red-900/20">
+              <div className="text-sm font-medium text-slate-400 mb-2 uppercase tracking-wide">Longest Estimate</div>
+              <div className="text-3xl font-bold text-red-400">
+                {maxDuration != null ? `${maxDuration.toFixed(1)}` : '—'}
+                <span className="text-lg font-normal text-slate-500/80 ml-1">days</span>
               </div>
             </div>
           </div>
 
-          <div className="text-sm text-slate-400 mt-4">
-            Duration predictions help estimate job completion timelines based on historical data.
+          <div className="bg-blue-900/10 border border-blue-900/20 rounded-lg p-4 text-sm text-blue-200/80">
+            <p><strong>Note:</strong> Completion time predictions utilize historical job data to estimate job duration. These are estimates only.</p>
           </div>
         </div>
       )}
@@ -204,7 +209,10 @@ function ProfitabilityView({ predictions, selectedJobs, loading, error }: {
   let confCount = 0;
 
   // Collect results for the chart
-  Object.values(predictions).forEach((p) => {
+  predictedJobs.forEach((job) => {
+    const id = String(job.id ?? job.ID ?? '');
+    const p = predictions[id];
+
     if (!p) return;
     const k = p.class ?? null;
     if (k && (k === 'High' || k === 'Medium' || k === 'Low')) counts[k]++;
@@ -235,9 +243,9 @@ function ProfitabilityView({ predictions, selectedJobs, loading, error }: {
             <div className="text-sm text-slate-300">Predicted: <strong>{predictedCount}</strong></div>
           </div>
 
-          <div className="space-y-3">
-            {/* Chart.js Bar Chart */}
-            <div className="bg-slate-800/50 rounded-lg p-4">
+          <div className="flex flex-col lg:flex-row gap-8 items-start">
+            {/* Chart Section */}
+            <div className="flex-1 w-full bg-slate-800/50 rounded-lg p-4 min-h-[300px]">
               <Bar
                 data={{
                   labels: ['Low', 'Medium', 'High'],
@@ -291,19 +299,36 @@ function ProfitabilityView({ predictions, selectedJobs, loading, error }: {
                     },
                   },
                 }}
-                height={200}
               />
             </div>
 
-            <div className="pt-4 border-t border-slate-800 mt-4">
-              <div className="text-sm text-slate-300">Counts</div>
-              <div className="flex gap-4 mt-2 text-sm text-slate-200">
-                <div>High: <strong>{counts.High}</strong></div>
-                <div>Medium: <strong>{counts.Medium}</strong></div>
-                <div>Low: <strong>{counts.Low}</strong></div>
+            {/* Stats Section */}
+            <div className="w-full lg:w-72 pt-4 lg:pt-0 border-t lg:border-t-0 lg:border-l border-slate-800 lg:pl-8 flex flex-col gap-6 justify-center h-full min-h-[300px]">
+              <div>
+                <h4 className="text-sm font-medium text-slate-400 uppercase tracking-wider mb-3">Distribution</h4>
+                <div className="space-y-3">
+                  <div className="flex justify-between items-center p-3 rounded bg-slate-800/30 border border-green-900/30">
+                    <span className="text-green-400 font-medium">High</span>
+                    <span className="text-xl font-bold text-slate-100">{counts.High}</span>
+                  </div>
+                  <div className="flex justify-between items-center p-3 rounded bg-slate-800/30 border border-yellow-900/30">
+                    <span className="text-yellow-400 font-medium">Medium</span>
+                    <span className="text-xl font-bold text-slate-100">{counts.Medium}</span>
+                  </div>
+                  <div className="flex justify-between items-center p-3 rounded bg-slate-800/30 border border-red-900/30">
+                    <span className="text-red-400 font-medium">Low</span>
+                    <span className="text-xl font-bold text-slate-100">{counts.Low}</span>
+                  </div>
+                </div>
               </div>
 
-              <div className="text-sm text-slate-300 mt-3">Average confidence: <strong>{avgConfidence != null ? `${(avgConfidence * 100).toFixed(1)}%` : '—'}</strong></div>
+              <div>
+                 <h4 className="text-sm font-medium text-slate-400 uppercase tracking-wider mb-2">Confidence</h4>
+                 <div className="text-3xl font-bold text-blue-400">
+                    {avgConfidence != null ? `${(avgConfidence * 100).toFixed(1)}%` : '—'}
+                 </div>
+                 <p className="text-xs text-slate-500 mt-1">Average model confidence score</p>
+              </div>
             </div>
           </div>
         </div>

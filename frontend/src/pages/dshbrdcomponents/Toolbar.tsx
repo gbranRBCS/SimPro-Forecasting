@@ -16,7 +16,6 @@ interface FilterState {
   minRevenue: string; // Raw input string (e.g. "1000")
   maxRevenue: string; // Raw input string
   order: 'asc' | 'desc';
-  limit: string;    // "All" or a number as string
 }
 
 interface ToolbarProps {
@@ -160,21 +159,6 @@ export function Toolbar({
               <option value="desc">Desc</option>
               <option value="asc">Asc</option>
             </select>
-          </div>
-
-          <div className="flex flex-col gap-1.5">
-            <label htmlFor="limit" className="text-xs text-slate-400 font-medium">
-              Limit (debug)
-            </label>
-            <input
-              id="limit"
-              type="number"
-              placeholder="All"
-              value={filters.limit}
-              onChange={handleChange('limit')}
-              disabled={isDisabled}
-              className="px-3 py-2 bg-slate-800 border border-slate-700 rounded-lg text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-600/60 focus:border-transparent disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            />
           </div>
         </div>
 

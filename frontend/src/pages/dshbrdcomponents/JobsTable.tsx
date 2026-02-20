@@ -1,18 +1,17 @@
 import { useMemo, useState, useCallback } from 'react';
-import { Loader2 } from '../../components/icons';
+import { Loader2, Search } from '../../components/icons';
 import { formatCurrency, formatDate, classBadgeProps } from '../../utils/jobs';
 import type { Job, Prediction } from '../../features/jobs/api';
+
+// Import Algorithms
+import { searchJobs } from '../../utils/searching';
+import { sortJobs, type SortKey, type SortDirection } from '../../utils/sorting';
 
 /**
 JOBS TABLE COMPONENT
 -------------------
 This component is the main component of the Dashboard. It displays a list of SimPRO jobs,
 normalized into a common format, and allows the user to sort and select them.
-
-Why this matters:
-SimPRO data can be messy. Fields such as "Name" might be "CompanyName" on a customer object,
-or "SiteName" on a site object. This table tries to normalise this by using "getter" functions
-that look for the best available data.
  */
 
 interface JobsTableProps {
@@ -30,14 +29,10 @@ interface JobsTableProps {
   predictionType?: 'profitability' | 'duration' | 'none';
 }
 
-type SortDirection = 'asc' | 'desc' | null;
-type SortKey = 'customer' | 'site' | 'status' | 'issued' | 'revenue' | 'profitability';
-
 // A helper for local sorting state.
-
 interface SortState {
   key: SortKey | null;
-  direction: SortDirection;
+  direction: SortDirection | null;
 }
 
 export function JobsTable({ 
@@ -54,12 +49,11 @@ export function JobsTable({
     direction: null,
   });
 
+  // Search State
+  const [searchTerm, setSearchTerm] = useState('');
+
   /**
   Safe String Converter
-  ---------------------
-  SimPRO APIs can return objects where we expect strings, or numbers 
-  where we expect strings. This helper tries to extract a meaningful label 
-  from the input.
   */
   const toDisplayString = (value: unknown): string => {
     if (value === null || value === undefined) return '-';
@@ -187,14 +181,20 @@ export function JobsTable({
 
   // Map High/Medium/Low to numeric values for sorting
   const getProfitRank = (job: Job): number | null => {
-    const cls = getProfitClassValue(job);
-    if (!cls || typeof cls !== 'string') return null;
-    const key = cls.trim().toLowerCase();
-    
-    // Higher number = Better profitability
-    if (key === 'high') return 3;
-    if (key === 'medium') return 2;
-    if (key === 'low') return 1;
+    // Check local prediction results first
+    if (predictions) {
+      const id = String(getIdValue(job) ?? '');
+      if (id && predictions[id]) {
+        const predClass = predictions[id].class;
+        if (predClass) {
+           const key = predClass.trim().toLowerCase();
+           if (key === 'high') return 3;
+           if (key === 'medium') return 2;
+           if (key === 'low') return 1;
+        }
+      }
+    }
+
     return 0; 
   };
 
@@ -255,103 +255,19 @@ export function JobsTable({
     return null;
   };
 
-  // -- Sorting Logic --
-  // This configuration object tells us how to extract values for each sort key,
-  // and what type of comparison to perform (string vs number).
-  
-  function getSortConfig(key: SortKey): {
-    type: 'string' | 'number';
-    extractor: (job: Job) => string | number | null;
-  } {
-    switch (key) {
-      case 'customer':
-        return {
-          type: 'string',
-          extractor: (job) => toSortableString(getCustomerValue(job)),
-        };
-      case 'site':
-        return {
-          type: 'string',
-          extractor: (job) => toSortableString(getSiteValue(job)),
-        };
-      case 'status':
-        return {
-          type: 'string',
-          extractor: (job) => toSortableString(getStatusValue(job)),
-        };
-      case 'issued':
-        return {
-          type: 'number',
-          extractor: (job) => {
-            const issued = getIssuedValue(job) ?? getDueValue(job);
-            // Assuming ISO strings for dates
-            const parsed = parseDateValue(issued);
-            return parsed ? parsed.getTime() : null;
-          },
-        };
-      case 'revenue':
-        return {
-          type: 'number',
-          extractor: (job) => getRevenueValue(job),
-        };
-      case 'profitability':
-      default:
-        return {
-          type: 'number',
-          extractor: (job) => getProfitRank(job),
-        };
-    }
-  }
 
-  // Safe comparisons that handle nulls
-  const compareValues = (
-    aValue: string | number | null,
-    bValue: string | number | null,
-    type: 'string' | 'number',
-  ) => {
-    if (aValue === null || aValue === undefined) {
-      // If both are null, they are equal. If only A is null, it goes after B.
-      return bValue === null || bValue === undefined ? 0 : 1;
-    }
-    if (bValue === null || bValue === undefined) {
-      return -1;
-    }
-
-    if (type === 'number') {
-      return (aValue as number) - (bValue as number);
-    }
-
-    // String comparison for proper handling of accents, layout, etc.
-    return String(aValue).localeCompare(String(bValue), undefined, {
-      sensitivity: 'base',
-      numeric: true,
-    });
-  };
-
-  // Memoized sorted list of jobs.
-  // We map to {job, index} to guarantee correct sorting when values are equal.
   const sortedJobs = useMemo(() => {
-    if (!sortState.key || !sortState.direction) {
-      return jobs;
-    }
+    // Use linear search
+    const searchedJobs = searchJobs(jobs, searchTerm);
 
-    const { extractor, type } = getSortConfig(sortState.key);
-    const directionFactor = sortState.direction === 'asc' ? 1 : -1;
-
-    return [...jobs]
-      .map((job, index) => ({ job, index }))
-      .sort((a, b) => {
-        const aValue = extractor(a.job);
-        const bValue = extractor(b.job);
-        
-        const primary = compareValues(aValue, bValue, type);
-        if (primary !== 0) {
-          return primary * directionFactor;
-        }
-        return a.index - b.index;
-      })
-      .map(({ job }) => job);
-  }, [jobs, sortState]);
+    // Use merge sort
+    return sortJobs(
+      searchedJobs, 
+      sortState.key, 
+      sortState.direction, 
+      predictionType === 'profitability' ? predictions : undefined
+    );
+  }, [jobs, sortState, searchTerm, predictions, predictionType]);
 
   const handleSort = useCallback(
     (key: SortKey) => {
@@ -408,6 +324,24 @@ export function JobsTable({
           </div>
         </div>
       )}
+
+      {/* Search Input */}
+      <div className="p-4 border-b border-slate-800 bg-slate-900/50">
+        <label htmlFor="search-jobs" className="sr-only">Search Jobs</label>
+        <div className="relative max-w-md">
+          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+            <Search className="h-4 w-4 text-slate-500" />
+          </div>
+          <input
+            id="search-jobs"
+            type="text"
+            className="block w-full pl-10 pr-3 py-2 border border-slate-700 rounded-lg leading-5 bg-slate-950/50 text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500 sm:text-sm transition-all"
+            placeholder="Search by customer, site, or job description..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
+      </div>
 
       <div className="overflow-x-auto">
         <table className="w-full">
@@ -515,8 +449,7 @@ export function JobsTable({
               {/* Dynamic Prediction Columns */}
               {predictionType === 'profitability' && (
                 <>
-                  <th className="px-4 py-3 text-left text-xs font-medium text-purple-400 uppercase tracking-wider whitespace-nowrap">Predicted Class</th>
-                  <th className="px-4 py-3 text-right text-xs font-medium text-purple-400 uppercase tracking-wider whitespace-nowrap">Confidence</th>
+                  <th className="px-4 py-3 text-right text-xs font-medium text-slate-400 uppercase tracking-wider whitespace-nowrap">Confidence</th>
                 </>
               )}
             </tr>
@@ -556,10 +489,37 @@ export function JobsTable({
               const dueValue = getDueValue(job);
               const revenueValue = getRevenueValue(job);
 
+              let rowClass = "border-b border-slate-800 last:border-0 transition-colors group";
+              let hasProfitClass = false;
+
+              if (predictionType === 'profitability') {
+                  const p = predictions[jobIdKey];
+                  const profitClass = p?.class;
+                  
+                  if (profitClass) {
+                    const key = String(profitClass).toLowerCase();
+                    if (key === 'high') {
+                      rowClass += " bg-green-950/20 hover:bg-green-900/30"; 
+                      hasProfitClass = true;
+                    } else if (key === 'medium') {
+                      rowClass += " bg-yellow-950/20 hover:bg-yellow-900/30";
+                      hasProfitClass = true;
+                    } else if (key === 'low') {
+                      rowClass += " bg-red-950/20 hover:bg-red-900/30";
+                      hasProfitClass = true;
+                    }
+                  }
+              }
+
+              // Fallback hover if no profit class
+              if (!hasProfitClass) {
+                  rowClass += " hover:bg-slate-800/50";
+              }
+
               return (
                 <tr
                   key={jobIdKey}
-                  className="hover:bg-slate-800/50 transition-colors group"
+                  className={rowClass}
                 >
                   {/* Select Row */}
                   <td className="px-4 py-3 text-sm text-slate-300 whitespace-nowrap">
@@ -631,42 +591,40 @@ export function JobsTable({
                   
                   {/* Profitability Badge (Historical or Estimated) */}
                   <td className="px-4 py-3 text-sm whitespace-nowrap">
-                    {getProfitabilityBadge(job) || (
-                      <span className="text-slate-600 text-xs italic">Unknown</span>
-                    )}
+                    {(() => {
+                        const p = predictions[jobIdKey];
+                        const effectiveClass = p?.class;
+                        
+                        if (!effectiveClass) {
+                           return <span className="text-slate-600 text-xs italic">Unknown</span>;
+                        }
+
+                        // Use temporary object for badge renderer
+                        const tempJob = { 
+                          ...job, 
+                          profitability_class: effectiveClass,
+                          profitability: { ...(job as any).profitability, class: effectiveClass }
+                        };
+                        
+                        return getProfitabilityBadge(tempJob as Job) || (
+                           <span className="text-slate-600 text-xs italic">Unknown</span>
+                        );
+                    })()}
                   </td>
 
                   {/* ML Predictions */}
                   {predictionType === 'profitability' && (
-                    <>
-                      <td className="px-4 py-3 text-sm text-slate-100 whitespace-nowrap">
-                        {(() => {
-                          const p = predictions[jobIdKey];
-                          // Use prediction if available, else fall back to known class
-                          const klass = p?.class ?? job.profitability_class ?? (job as any).profitability?.class ?? null;
-                          
-                          if (p?.class) {
-                            return <span className="text-purple-300 font-semibold">{p.class} ✨</span>;
-                          }
-                          return klass ? (
-                            <span className="text-slate-400">{klass}</span>
-                          ) : (
-                            <span className="text-slate-600">-</span>
-                          );
-                        })()}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
-                        {(() => {
-                          const p = predictions[jobIdKey];
-                          const score = p?.confidence ?? p?.probability ?? null;
-                          return typeof score === 'number' ? (
-                            <span className="text-purple-300 font-mono">{(score * 100).toFixed(0)}%</span>
-                          ) : (
-                            <span className="text-slate-600">-</span>
-                          );
-                        })()}
-                      </td>
-                    </>
+                    <td className="px-4 py-3 text-sm text-right whitespace-nowrap">
+                      {(() => {
+                        const p = predictions[jobIdKey];
+                        const score = p?.confidence ?? p?.probability ?? null;
+                        return typeof score === 'number' ? (
+                          <span className="text-slate-300 font-mono">{(score * 100).toFixed(0)}%</span>
+                        ) : (
+                          <span className="text-slate-600">-</span>
+                        );
+                      })()}
+                    </td>
                   )}
                 </tr>
               );

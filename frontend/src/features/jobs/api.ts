@@ -2,7 +2,7 @@ import api from "../../lib/api";
 
 /**
 Represents a Job entity as returned by the API.
-This combines raw SimPRO data (PascalCase) with normalized fields added by the backend during sync.
+This combines raw SimPRO data with normalized fields added by the backend during sync.
  */
 export interface Job {
   // SimPRO ID is usually 'ID' (int) or 'id' (string) depending on endpoint version

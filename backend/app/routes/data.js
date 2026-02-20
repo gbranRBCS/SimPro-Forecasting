@@ -804,15 +804,30 @@ router.get("/sync", authRequired, async (req, res) => {
   // How many detailed lookups to do in parallel.
   const concurrency = parseInt(process.env.ENRICH_CONCURRENCY || "5", 10);
 
+  // Timing metrics
+  const timings = {
+    start: Date.now(),
+    fetchStart: null,
+    fetchEnd: null,
+    enrichmentStart: null,
+    enrichmentEnd: null,
+    dbStart: null,
+    dbEnd: null,
+    end: null,
+  };
+
   syncing = true;
   try {
     console.log(`[sync] mode=${syncMode}, params=`, JSON.stringify(params, null, 2));
     
     // 1. Fetch the list of jobs
+    timings.fetchStart = Date.now();
     const listRaw = await fetchSimPROJobs(params, { historical: historicalRange });
     const list = Array.isArray(listRaw) ? listRaw : [];
+    timings.fetchEnd = Date.now();
     
-    console.info(`[sync] fetched ${list.length} raw jobs. Starting enrichment...`);
+    const fetchDurationMs = timings.fetchEnd - timings.fetchStart;
+    console.info(`[sync] fetched ${list.length} raw jobs in ${fetchDurationMs}ms. Starting enrichment...`);
 
     const earliestAllowedMs = (
       syncMode === "full" ? FULL_HISTORY_START : UPDATE_HISTORY_START
@@ -833,13 +848,16 @@ router.get("/sync", authRequired, async (req, res) => {
 
     const allKept = [];
     let totalDetailFailures = 0;
+    const batchTimings = [];
 
     // 2. Fetch details in chunks to avoid overwhelming the server or API
+    timings.enrichmentStart = Date.now();
     for (
       let i = 0;
       i < idsAll.length && (!KEEP_MAX || allKept.length < KEEP_MAX);
       i += concurrency
     ) {
+      const batchStart = Date.now();
       const slice = idsAll.slice(i, i + concurrency);
       
       const { kept, detailFailures } = await processJobBatch(
@@ -850,11 +868,20 @@ router.get("/sync", authRequired, async (req, res) => {
         syncMode
       );
       
+      const batchEnd = Date.now();
+      batchTimings.push({
+        batchIndex: Math.floor(i / concurrency),
+        jobsProcessed: slice.length,
+        jobsKept: kept.length,
+        durationMs: batchEnd - batchStart,
+      });
+      
       allKept.push(...kept);
       totalDetailFailures += detailFailures;
 
       if (requestGapMs > 0) await sleep(requestGapMs);
     }
+    timings.enrichmentEnd = Date.now();
 
     const filteredCount = allKept.length;
     const excludedCount = list.length - filteredCount;
@@ -866,6 +893,7 @@ router.get("/sync", authRequired, async (req, res) => {
     }
 
     // 3. Prepare for DB
+    timings.dbStart = Date.now();
     const rows = allKept.map((job) => buildJobRow(job)).filter(Boolean);
 
     if (syncMode === "full") {
@@ -879,6 +907,19 @@ router.get("/sync", authRequired, async (req, res) => {
     // Refresh memory cache
     cachedJobs = loadJobs();
     lastSyncTime = Date.now();
+    timings.dbEnd = Date.now();
+    timings.end = Date.now();
+
+    const enrichmentDurationMs = timings.enrichmentEnd - timings.enrichmentStart;
+    const dbDurationMs = timings.dbEnd - timings.dbStart;
+    const totalDurationMs = timings.end - timings.start;
+    const avgBatchDurationMs = batchTimings.length > 0
+      ? batchTimings.reduce((sum, b) => sum + b.durationMs, 0) / batchTimings.length
+      : 0;
+
+    console.info(
+      `[sync] Complete in ${totalDurationMs}ms (fetch: ${fetchDurationMs}ms, enrichment: ${enrichmentDurationMs}ms, db: ${dbDurationMs}ms)`
+    );
 
     res.json({
       message: syncMode === "full" ? "Full sync complete" : "Update sync complete",
@@ -891,6 +932,15 @@ router.get("/sync", authRequired, async (req, res) => {
       params,
       mode: syncMode,
       jobs: cachedJobs,
+      timings: {
+        totalMs: totalDurationMs,
+        fetchMs: fetchDurationMs,
+        enrichmentMs: enrichmentDurationMs,
+        dbMs: dbDurationMs,
+        avgBatchMs: Math.round(avgBatchDurationMs * 100) / 100,
+        batchCount: batchTimings.length,
+        batches: batchTimings,
+      },
     });
   } catch (err) {
     console.error("Sync failed:", axiosDiag(err) || err);
