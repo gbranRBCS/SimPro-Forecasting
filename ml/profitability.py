@@ -7,13 +7,12 @@ import os
 import sys
 import json
 import math
-import re
 import traceback
 import inspect
 import joblib
 import numpy as np
 import pandas as pd
-from typing import List, Dict, Any, Optional, Tuple, Iterable
+from typing import List, Dict, Any, Optional, Tuple
 
 from fastapi import FastAPI, Body
 from pydantic import BaseModel
@@ -35,6 +34,17 @@ if MODULE_DIR and MODULE_DIR not in sys.path:
     sys.path.insert(0, MODULE_DIR)
 
 from transformers import RareCategoryCapper, Log1pTransformer
+from common import (
+    NUMERIC_COLS,
+    CATEGORICAL_COLS,
+    TEXT_COL,
+    ALL_FEATURES,
+    to_num,
+    to_text,
+    parse_job_features,
+    PredictRequest,
+    TrainRequest as CommonTrainRequest,
+)
 
 # Application Config
 
@@ -44,86 +54,18 @@ app = FastAPI(title="ML Service - Profitability", version="1.0.0")
 MODEL_PATH = os.environ.get("MODEL_PATH", "model.joblib")
 META_PATH = os.environ.get("MODEL_META_PATH", "model_meta.json")
 
-# Feature Definitions
-NUMERIC_COLS = [
-    "revenue", "materials", "labour", "overhead", "cost_total",
-    "job_age_days", "lead_time_days", "is_overdue"
-]
-CATEGORICAL_COLS = ["statusName", "jobType", "customerName", "siteName", "date_month", "date_dow"]
-TEXT_COL = "descriptionText"
-ALL_FEATURES = NUMERIC_COLS + CATEGORICAL_COLS + [TEXT_COL]
+TEXT_FEATURE = TEXT_COL[0] if isinstance(TEXT_COL, list) else TEXT_COL
 
 # Labels
 CLASS_LABELS = ["Low", "Medium", "High"]
 DEFAULT_THRESHOLDS = {"low": 0.44, "high": 0.64}
 
-# Data Models
-
-class PredictRequest(BaseModel):
-    data: List[Dict[str, Any]]
-
 class Thresholds(BaseModel):
     low: Optional[float] = None
     high: Optional[float] = None
 
-class TrainRequest(BaseModel):
-    data: List[Dict[str, Any]]
-    test_size: Optional[float] = 0.15
-    random_state: Optional[int] = 42
-    max_tfidf_features: Optional[int] = 500
-    rare_top_k: Optional[int] = 20
-    use_text: Optional[bool] = True
-    calibrate: Optional[bool] = False
-    cutoff_date: Optional[str] = None
+class TrainRequest(CommonTrainRequest):
     thresholds: Optional[Thresholds] = None
-
-# Helper Functions (Type Conversion)
-
-def to_num(x: Any) -> Optional[float]:
-    """Convert to float, handling currency and NaN."""
-    try:
-        if x is None: return None
-        if isinstance(x, (int, float)):
-             return None if (isinstance(x, float) and np.isnan(x)) else float(x)
-        if isinstance(x, str):
-            s = x.strip()
-            if not s: return None
-            # Strip currency and separators
-            s = re.sub(r'[^0-9eE\.\-+]', '', s)
-            return float(s)
-        return float(x)
-    except Exception:
-        return None
-
-def to_text(value: Any, *, allow_blank: bool = False) -> Optional[str]:
-    if value is None:
-        return "" if allow_blank else None
-
-    if isinstance(value, str):
-        trimmed = value.strip()
-        if trimmed: return trimmed
-        return "" if allow_blank else None
-
-    if isinstance(value, (int, float, bool)):
-        return str(value)
-
-    if isinstance(value, dict):
-        for key in ("name", "Name", "label", "Label", "value", "Value", "description"):
-            candidate = value.get(key)
-            if isinstance(candidate, str) and candidate.strip():
-                return candidate.strip()
-        try:
-            return json.dumps(value, sort_keys=True)
-        except Exception:
-            return str(value)
-
-    if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
-        parts = [to_text(item, allow_blank=False) for item in value]
-        parts = [p for p in parts if p]
-        if parts: return " ".join(parts)
-        return "" if allow_blank else None
-
-    return str(value)
 
 def to_serializable(value: Any) -> Any:
     if value is None:
@@ -228,32 +170,14 @@ def build_dataframe(
     resolved_thresholds = resolve_thresholds(thresholds)
 
     for j in records:
-        revenue = to_num(j.get("revenue") or (j.get("Total", {}) or {}).get("IncTax"))
-        materials = to_num(j.get("materials")) or 0.0
-        labour = to_num(j.get("labour")) or 0.0
-        overhead = to_num(j.get("overhead")) or 0.0
-        cost_total = to_num(j.get("cost_total"))
-        if cost_total is None:
-            cost_total = to_num(j.get("cost_est_total"))
-        if cost_total is None and (materials or labour or overhead):
-            cost_total = materials + labour + overhead
-        row = {
-            "revenue": revenue,
-            "materials": materials,
-            "labour": labour,
-            "overhead": overhead,
-            "cost_total": cost_total,
-            "job_age_days": to_num(j.get("job_age_days")) or 0.0,
-            "lead_time_days": to_num(j.get("lead_time_days")) or 0.0,
-            "is_overdue": to_num(j.get("is_overdue")) or 0.0,
-            "statusName": to_text(j.get("statusName")),
-            "jobType": to_text(j.get("jobType")),
-            "customerName": to_text(j.get("customerName")),
-            "siteName": to_text(j.get("siteName")),
-            "descriptionText": to_text(j.get("descriptionText"), allow_blank=True) or "",
-            "_id": j.get("ID") or j.get("id"),
-            "dateIssued": j.get("dateIssued") or j.get("DateIssued"),
-        }
+        row = parse_job_features(j)
+
+        if row.get("revenue") is None:
+            row["revenue"] = to_num((j.get("Total", {}) or {}).get("IncTax"))
+
+        row["dateIssued"] = row.get("dateIssued") or j.get("DateIssued")
+        row["descriptionText"] = to_text(j.get("descriptionText")) or ""
+
         try:
             dt = pd.to_datetime(row.get("dateIssued"))
             row["date_month"] = dt.strftime("%b") if pd.notnull(dt) else "Unknown"
@@ -305,6 +229,7 @@ def build_pipeline(
     if use_text:
         text_transformer = TfidfVectorizer(max_features=max_tfidf_features, ngram_range=(1, 2))
         transformers.append(("txt", text_transformer, TEXT_COL))
+        transformers[-1] = ("txt", text_transformer, TEXT_FEATURE)
 
     pre = ColumnTransformer(
         transformers=transformers,
@@ -502,7 +427,7 @@ def train(payload: TrainRequest = Body(...)):
         "use_text": use_text,
         "thresholds": thresholds,
         "labels": CLASS_LABELS,
-        "features": NUMERIC_COLS + CATEGORICAL_COLS + ([TEXT_COL] if use_text else []),
+        "features": NUMERIC_COLS + CATEGORICAL_COLS + ([TEXT_FEATURE] if use_text else []),
         "split_strategy": split_strategy,
         "cutoff_date": cutoff_date if split_strategy == "temporal" else None,
         "n_train": len(X_train),

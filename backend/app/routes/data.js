@@ -1083,7 +1083,7 @@ async function handlePredictionRequest(req, res, serviceUrl, endpointName) {
 router.post("/predict", authRequired, async (req, res) => {
   const url = process.env.ML_PROFITABILITY_URL 
     ? `${process.env.ML_PROFITABILITY_URL}/predict` 
-    : null;
+    : "http://localhost:8000/predict";
     
   return handlePredictionRequest(req, res, url, "predict-profitability");
 });
@@ -1091,8 +1091,8 @@ router.post("/predict", authRequired, async (req, res) => {
 // Predict completion time (duration)
 router.post("/predict_duration", authRequired, async (req, res) => {
   const url = process.env.ML_DURATION_URL 
-    ? `${process.env.ML_DURATION_URL}/predict_duration` 
-    : null;``
+    ? `${process.env.ML_DURATION_URL}/predict` 
+    : "http://localhost:8001/predict";
     
   return handlePredictionRequest(req, res, url, "predict-duration");
 });

@@ -5,16 +5,12 @@
 import os
 import sys
 import json
-import math
-import re
 import traceback
 import joblib
-import numpy as np
 import pandas as pd
-from typing import List, Dict, Any, Optional, Tuple, Iterable
+from typing import List, Dict, Any, Optional, Tuple
 
 from fastapi import FastAPI, Body
-from pydantic import BaseModel
 
 from sklearn.pipeline import Pipeline
 from sklearn.compose import ColumnTransformer
@@ -24,12 +20,23 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LinearRegression
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.metrics import mean_absolute_error
 
 # Path Setup
 MODULE_DIR = os.path.dirname(__file__)
 
 from transformers import RareCategoryCapper, Log1pTransformer
+from common import (
+    NUMERIC_COLS,
+    CATEGORICAL_COLS,
+    TEXT_COL,
+    to_num,
+    to_text,
+    to_bool,
+    parse_job_features,
+    PredictRequest,
+    TrainRequest,
+)
 
 # Application Config
 
@@ -39,128 +46,7 @@ app = FastAPI(title="ML Service - Completion Time", version="1.0.0")
 DURATION_MODEL_PATH = os.environ.get("DURATION_MODEL_PATH", "model_duration.joblib")
 DURATION_META_PATH = os.environ.get("DURATION_MODEL_META_PATH", "model_duration_meta.json")
 
-# Features
-NUMERIC_COLS = [
-    "revenue", "materials", "labour", "overhead", "cost_total",
-    "job_age_days", "lead_time_days", "is_overdue"
-]
-CATEGORICAL_COLS = ["statusName", "jobType", "customerName", "siteName", "date_month", "date_dow"]
-TEXT_COL = "descriptionText"
-ALL_COLS = NUMERIC_COLS + CATEGORICAL_COLS + [TEXT_COL]
-
-#Models
-
-class PredictRequest(BaseModel):
-    data: List[Dict[str, Any]]
-
-class TrainRequest(BaseModel):
-    data: List[Dict[str, Any]]
-    test_size: float = 0.15
-    random_state: int = 42
-    max_tfidf_features: int = 500
-    rare_top_k: int = 20
-    use_text: bool = True
-    cutoff_date: Optional[str] = None
-
-# Helper Functions for Type Conversion etc.
-
-def to_num(x: Any) -> Optional[float]:
-    # converts to float
-    try:
-        if x is None: return None
-        if isinstance(x, float) and np.isnan(x):
-            return None
-        elif isinstance(x, (int, float)):
-            return float(x)
-        
-        if isinstance(x, str):
-            s = x.strip()
-            if s == False: return None
-            # Strip currency symbols and/or seperators
-            s = re.sub(r'[^0-9eE\.\-+]', '', s)
-            return float(s)
-            
-        return float(x)
-    except Exception:
-        return None
-
-def to_text(value: Any) -> Optional[str]:
-    #Converts any value into a string for categorical features
-    if value is None:
-        return None
-
-    if isinstance(value, str):
-        trimmed = value.strip()
-        return trimmed or None
-
-    if isinstance(value, (int, float, bool)):
-        return str(value)
-
-    if isinstance(value, dict):
-        # use readable label keys if present
-        for key in ("name", "Name", "label", "Label", "value", "Value", "description"):
-            trial = value.get(key)
-            if isinstance(trial, str) and trial.strip() == True:
-                return trial.strip()
-        try:
-            return json.dumps(value, sort_keys=True)
-        except Exception:
-            return str(value)
-
-    if isinstance(value, Iterable) and not isinstance(value, (str, bytes)):
-        # join list items
-        parts = [to_text(item) for item in value]
-        parts = [p for p in parts if p == True] # remove falsy values
-        if parts == True: return " ".join(parts)
-        else:
-            return None
-
-    return str(value)
-
-def to_bool(value: Any) -> bool:
-    #Converts to boolean
-    if isinstance(value, bool): return value
-    if isinstance(value, (int, float)): return bool(int(value) == 1)
-    if isinstance(value, str):
-        converted = value.strip().lower()
-        if converted in {"true", "1", "yes", "y"}: return True
-        if converted in {"false", "0", "no", "n"}: return False
-    return False
-
-def to_serializable(value: Any) -> Any:
-    #Prepares Python objects for JSON dump
-    if value is None:
-        return None
-    
-    if isinstance(value, (str, int, float, bool)):
-        if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
-            return None
-        else:
-            return value
-        
-    # Handle Numpy types
-    if isinstance(value, (np.floating, np.float32, np.float64)):
-        floated_vers = float(value)
-        return None if math.isnan(floated_vers) else floated_vers
-        
-    if isinstance(value, (np.integer, np.int32, np.int64)):
-        return int(value)
-        
-    if isinstance(value, (np.bool_,)):
-        return bool(value)
-        
-    if isinstance(value, (list, tuple, set)):
-        return [to_serializable(i) for i in value]
-        
-    if isinstance(value, dict):
-        result = {}
-        for key, val in value.items():
-            new_key = str(key)
-            new_val = to_serializable(val)
-            result[new_key] = new_val
-        return result
-        
-    return str(value)
+TEXT_FEATURE = TEXT_COL[0] if isinstance(TEXT_COL, list) else TEXT_COL
 
 # Dataset building
 
@@ -173,59 +59,24 @@ def build_duration_dataset(records: List[Dict[str, Any]]) -> Tuple[pd.DataFrame,
     job_ids = []
 
     for j in records:
-        # Feature Extraction
-        revenue = to_num(j.get("revenue") or (j.get("Total", {}) or {}).get("IncTax"))
-        materials = to_num(j.get("materials")) or 0.0
-        labour = to_num(j.get("labour")) or 0.0
-        overhead = to_num(j.get("overhead")) or 0.0
+        row = parse_job_features(j)
 
-        #Cost fallback logic
-        cost_total = to_num(j.get("cost_total"))
-        if cost_total is None:
-            cost_total = to_num(j.get("cost_est_total")) 
-        if cost_total is None and (materials or labour or overhead):
-            cost_total = materials + labour + overhead
+        if row.get("revenue") is None:
+            row["revenue"] = to_num((j.get("Total", {}) or {}).get("IncTax"))
 
-        issued_date_value = (
-            j.get("dateIssued") or j.get("DateIssued") or 
-            j.get("issuedDate") or j.get("createdDate")
-        )
-        
-        # Construct Row
-        row = {
-            "revenue": revenue,
-            "materials": materials if materials != None else None,
-            "labour": labour if labour != None else None,
-            "overhead": overhead if overhead != None else None,
-            "cost_total": cost_total,
-            "job_age_days": to_num(j.get("job_age_days")) or 0.0,
-            "lead_time_days": to_num(j.get("lead_time_days")) or 0.0,
-            "is_overdue": to_num(j.get("is_overdue")) or 0.0,
-            "statusName": to_text(j.get("statusName")),
-            "jobType": to_text(j.get("jobType")),
-            "customerName": to_text(j.get("customerName")),
-            "siteName": to_text(j.get("siteName")),
-            "descriptionText": to_text(j.get("descriptionText")) or "",
-            "_id": j.get("ID") or j.get("id"),
-            "dateIssued": issued_date_value,
-        }
+        if not row.get("dateIssued"):
+            row["dateIssued"] = (
+                j.get("DateIssued") or
+                j.get("issuedDate") or
+                j.get("createdDate")
+            )
 
-        # Date Features
-        if issued_date_value:
-            try:
-                dt = pd.to_datetime(issued_date_value)
-                if pd.notnull(dt):
-                    row["date_month"] = dt.strftime("%b")
-                    row["date_dow"] = dt.strftime("%a")
-                else:
-                    row["date_month"] = "Unknown"; row["date_dow"] = "Unknown"
-            except:
-                row["date_month"] = "Unknown"; row["date_dow"] = "Unknown"
-        else:
-            row["date_month"] = "Unknown"; row["date_dow"] = "Unknown"
+        row["descriptionText"] = to_text(j.get("descriptionText")) or ""
+
+        issued_date_value = row.get("dateIssued")
 
         # Target Variable - completion days
-        is_completed = to_bool(j.get("is_completed"))
+        is_completed = to_bool(j.get("is_completed")) or to_bool(j.get("isCompleted"))
         completion_days = to_num(j.get("completion_days"))
         
         has_valid_target = (
@@ -286,7 +137,7 @@ def build_duration_pipeline(
             max_features=max_tfidf_features,
             ngram_range=(1, 2),
         )
-        transformers.append(("txt", text_transformer, TEXT_COL))
+        transformers.append(("txt", text_transformer, TEXT_FEATURE))
 
     pre = ColumnTransformer(
         transformers=transformers,
@@ -402,7 +253,7 @@ def build_prediction_diagnostics(
 def root():
     return {
         "message": "ML Service - Completion Time Prediction",
-        "endpoints": ["/health", "/predict_duration", "/train_duration", "/model/info"]
+        "endpoints": ["/health", "/predict", "/predict_duration", "/train", "/train_duration", "/model/info"]
     }
 
 @app.get("/health", tags=["System"])
@@ -516,7 +367,7 @@ def train_duration(payload: TrainRequest = Body(...)):
         meta = {
             "model_name": selection["model_name"],
             "metrics": selection["metrics"],
-            "features": NUMERIC_COLS + CATEGORICAL_COLS + ([TEXT_COL] if use_text else []),
+            "features": NUMERIC_COLS + CATEGORICAL_COLS + ([TEXT_FEATURE] if use_text else []),
             "use_text": use_text,
             "cutoff_date": payload.cutoff_date if split_strategy == "temporal" else None,
             "split_strategy": split_strategy,
@@ -537,6 +388,7 @@ def train_duration(payload: TrainRequest = Body(...)):
     except Exception as exc:
         return {"ok": False, "error": f"Training process failed: {str(exc)}"}
 
+@app.post("/predict", tags=["Inference"])
 @app.post("/predict_duration", tags=["Inference"])
 def predict_duration(payload: PredictRequest = Body(...)):
     #Generates completion time estimates (days) for a list of jobs.
