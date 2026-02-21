@@ -36,12 +36,6 @@ export interface Job {
   materials_cost_est?: number;
   labor_cost_est?: number;
   
-  // Calculated Metrics
-  profit_est?: number;
-  margin_est?: number;         // e.g. 0.15 for 15%
-  netMarginPct?: number;
-  profitability_class?: "Low" | "Medium" | "High";
-  
   // Flags & Counters
   is_completed?: boolean;
   is_overdue?: boolean;
@@ -63,11 +57,6 @@ export type Prediction = {
   class?: "Low" | "Medium" | "High";
   confidence?: number;      // 0 to 1
   probability?: number;    // Legacy confidence field
-  
-  // -- Heuristic Fallbacks --
-  profitable?: boolean;
-  profit_est?: number | null;
-  margin_est?: number | null;
   
   // -- Duration Outputs --
   predicted_completion_days?: number; // In days

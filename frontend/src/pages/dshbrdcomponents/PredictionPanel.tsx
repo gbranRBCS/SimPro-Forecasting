@@ -113,7 +113,7 @@ function DurationView({ predictions, selectedJobs, loading, error }: {
   // Filter for jobs that we actually have a result for.
   // We match based on normalized IDs
   const predictedJobs = selectedJobs.filter((j) => {
-    const id = String(j.id ?? j.ID ?? '');
+    const id = String(j.id ?? '');
     return !!predictions[id];
   });
   const predictedCount = predictedJobs.length;
@@ -121,7 +121,7 @@ function DurationView({ predictions, selectedJobs, loading, error }: {
   // Extract pure numbers for stats
   const durations = predictedJobs
     .map((j) => {
-      const id = String(j.id ?? j.ID ?? '');
+      const id = String(j.id ?? '');
       const pred = predictions[id];
       return pred?.predicted_completion_days;
     })
@@ -199,7 +199,7 @@ function ProfitabilityView({ predictions, selectedJobs, loading, error }: {
   
   // Match results to selected jobs
   const predictedJobs = selectedJobs.filter((j) => {
-    const id = String(j.id ?? j.ID ?? '');
+    const id = String(j.id ?? '');
     return !!predictions[id];
   });
   const predictedCount = predictedJobs.length;
@@ -210,7 +210,7 @@ function ProfitabilityView({ predictions, selectedJobs, loading, error }: {
 
   // Collect results for the chart
   predictedJobs.forEach((job) => {
-    const id = String(job.id ?? job.ID ?? '');
+    const id = String(job.id ?? '');
     const p = predictions[id];
 
     if (!p) return;

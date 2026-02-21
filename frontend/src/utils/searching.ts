@@ -13,7 +13,7 @@ export function searchJobs(jobs: Job[], searchTerm: string): Job[] {
             
             // Convert job fields to lower case
             const customer = (job.customerName || '').toLowerCase();
-            const description = (job.Description || '').toLowerCase();
+            const description = (job.descriptionText || '').toLowerCase();
             const site = (job.siteName || '').toLowerCase();
 
             if (customer.includes(term) || description.includes(term) || site.includes(term)) {

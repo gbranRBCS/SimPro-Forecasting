@@ -25,7 +25,7 @@ export function sortJobs(jobs: Job[], key: SortKey | null, direction: SortDirect
                 const dateString = job.dateIssued;
                 return dateString ? new Date(dateString).getTime() : 0;
             case 'revenue':
-                return job.revenue ?? (job as any).Total?.IncTax ?? 0;
+                return job.revenue ?? 0;
             case 'profitability':
                 const profitClass = getProfitClass(job);
                 if (profitClass === "high") return 3;
@@ -41,7 +41,7 @@ export function sortJobs(jobs: Job[], key: SortKey | null, direction: SortDirect
         if (!predictions) return undefined;
 
         // get job ID
-        const id = job.id ?? (job as any).ID;
+        const id = job.id;
         const idKey = id != null ? String(id) : '';
 
         // find prediction value from ID

@@ -68,7 +68,6 @@ export function JobsTable({
         record.title ??
         record.CompanyName ??
         record.id ??
-        record.ID ??
         null;
 
       if (typeof candidate === 'string') return candidate;
@@ -124,60 +123,31 @@ export function JobsTable({
   // These functions locate data within the Job object.
 
   const getCustomerValue = (job: Job) =>
-    job.customerName ??
-    // Fallbacks for raw data properties if they exist
-    (job as any).Customer?.CompanyName ??
-    (job as any).Customer?.Name ??
-    (job as any).Customer ??
-    null;
+    job.customerName ?? null;
 
   const getSiteValue = (job: Job) => 
-    job.siteName ?? 
-    (job as any).Site?.Name ?? 
-    (job as any).Site ?? 
-    null;
+    job.siteName ?? null;
 
   const getStatusValue = (job: Job) =>
-    job.status_name ??
-    job.status?.Name ??
-    (job as any).Status?.Name ?? // Handle case where 'status' / 'Status' casing is different
-    (job as any).Status ?? 
-    job.stage ?? 
-    null;
+    job.status_name ?? job.stage ?? null;
 
   const getIssuedValue = (job: Job) =>
-    job.dateIssued ??
-    (job as any).Issued ?? 
-    (job as any).DateIssued ?? 
-    null;
+    job.dateIssued ?? null;
 
   const getDueValue = (job: Job) =>
-    job.dateDue ??
-    (job as any).Due ?? 
-    (job as any).DueDate ?? 
-    null;
+    job.dateDue ?? null;
 
   const getNameValue = (job: Job) => 
-    job.descriptionText ?? 
-    job.Description ?? 
-    (job as any).Name ?? // Some SimPRO endpoints use Name, others Description
-    (job as any).RequestNo ?? 
-    null;
+    job.descriptionText ?? `Job ${job.id ?? ''}`;
 
   const getIdValue = (job: Job) => 
-    job.id ?? 
-    job.ID ?? 
-    null;
+    job.id ?? null;
 
   const getRevenueValue = (job: Job) =>
-    toNumber(job.revenue) ?? 
-    toNumber((job as any).Total?.IncTax) ?? 
-    null;
+    toNumber(job.revenue) ?? null;
 
   const getProfitClassValue = (job: Job) =>
-    job.profitability_class ?? 
-    (job as any).profitability?.class ?? 
-    null;
+    (job as any).profitability?.class ?? null;
 
   // Map High/Medium/Low to numeric values for sorting
   const getProfitRank = (job: Job): number | null => {
@@ -599,15 +569,22 @@ export function JobsTable({
                            return <span className="text-slate-600 text-xs italic">Unknown</span>;
                         }
 
-                        // Use temporary object for badge renderer
-                        const tempJob = { 
-                          ...job, 
-                          profitability_class: effectiveClass,
-                          profitability: { ...(job as any).profitability, class: effectiveClass }
+                        const badge = classBadgeProps(effectiveClass);
+                        const styles = {
+                          success: 'bg-green-900/30 text-green-300 border-green-800/50',
+                          warning: 'bg-yellow-900/30 text-yellow-300 border-yellow-800/50',
+                          destructive: 'bg-red-900/30 text-red-300 border-red-800/50',
+                          default: 'bg-slate-800 border-slate-700 text-slate-300',
                         };
-                        
-                        return getProfitabilityBadge(tempJob as Job) || (
-                           <span className="text-slate-600 text-xs italic">Unknown</span>
+
+                        const className = styles[badge.tone as keyof typeof styles] || styles.default;
+
+                        return (
+                          <span
+                            className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-medium border ${className}`}
+                          >
+                            {badge.label}
+                          </span>
                         );
                     })()}
                   </td>

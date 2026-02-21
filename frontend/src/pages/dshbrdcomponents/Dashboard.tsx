@@ -70,21 +70,8 @@ Handles different formats SimPRO might return (direct number, string, or nested 
 function getRevenueValue(job: Job): number | null {
   if (!job) return null;
 
-  // 1. Check direct revenue field
   if (typeof job.revenue === 'number' && Number.isFinite(job.revenue)) {
     return job.revenue;
-  }
-
-  // 2. Check nested Total.IncTax
-  const incTax = job?.Total?.IncTax;
-  if (typeof incTax === 'number' && Number.isFinite(incTax)) {
-    return incTax;
-  }
-  
-  // 3. Try parsing string value
-  if (typeof incTax === 'string') {
-    const parsed = Number(incTax);
-    if (Number.isFinite(parsed)) return parsed;
   }
 
   return null;
@@ -431,15 +418,7 @@ export function Dashboard() {
       // Determine class (High/Medium/Low) - prefer model output, fallback to heuristic
       const classes = preds
         .map((p) => {
-          if (p.class) return p.class;
-          
-          // Legacy heuristic fallback
-          if (typeof p.margin_est === 'number') {
-            if (p.margin_est >= 0.1) return 'High';
-            if (p.margin_est >= 0.03) return 'Medium';
-            return 'Low';
-          }
-          return null;
+          return p.class ?? null;
         })
         .filter(Boolean) as string[];
 
@@ -556,7 +535,9 @@ export function Dashboard() {
 
       <Toolbar
         filters={filters}
-        onFilterChange={setFilters}
+        onFilterChange={(nextFilters) =>
+          setFilters((prev) => ({ ...prev, ...nextFilters }))
+        }
         onSync={handleSync}
         onLoadJobs={() => loadJobs()}
         isSyncing={isSyncing}
@@ -569,7 +550,7 @@ export function Dashboard() {
           <div className="w-full">
             <PredictionPanel
               predictionType={predictionType}
-              selectedJobs={jobs.filter((j) => selectedJobIds.includes(String(j.ID ?? j.id ?? '')))}
+              selectedJobs={jobs.filter((j) => selectedJobIds.includes(String(j.id ?? '')))}
               predictions={predictionType === 'profitability' ? profitabilityPredictions : durationPredictions}
               loading={predictionLoading}
               error={predictionError}
