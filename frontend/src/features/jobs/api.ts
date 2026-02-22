@@ -1,54 +1,47 @@
 import api from "../../lib/api";
 
 /**
-Represents a Job entity as returned by the API.
-This combines raw SimPRO data with normalized fields added by the backend during sync.
+Represents a job row from backend
  */
 export interface Job {
-  // SimPRO ID is usually 'ID' (int) or 'id' (string) depending on endpoint version
-  id: string | number;
-  ID?: number;
+  id: number;
+  descriptionText: string;
+  desc_len: number;
   
-  // Raw SimPRO Description (often contains HTML)
-  Description?: string;
-  // Cleaned plain-text description added by backend
-  descriptionText?: string;
+  customerName: string;
+  siteName: string;
+  status_name: string;
+  stage: string;
+  jobType: string;
   
-  customerName?: string;
-  siteName?: string;
+  // Date strings in ISO format (YYYY-MM-DD)
+  dateIssued: string;
+  dateDue: string;
+  dateCompleted: string;
+
+  age_days: number | null;
+  due_in_days: number | null;
+  completion_days: number | null;
   
-  // Status object from SimPRO
-  status?: { Name?: string; ID?: number; [key: string]: any };
-  // Normalized status name
-  status_name?: string;
-  
-  jobType?: string;
-  stage?: string;
-  
-  // Dates (ISO strings)
-  dateIssued?: string;
-  dateDue?: string;
-  dateCompleted?: string;
+  is_completed: boolean;
+  is_overdue: boolean;
+  has_emergency: number; // 0 or 1
   
   // Financials
-  revenue?: number;
-  cost_est_total?: number;
-  materials_cost_est?: number;
-  labor_cost_est?: number;
+  revenue: number | null;
+  materials_cost_est: number;
+  labor_cost_est: number;
+  overhead_est: number;
+  labor_hours_est: number;
+  cost_est_total: number;
   
-  // Flags & Counters
-  is_completed?: boolean;
-  is_overdue?: boolean;
-  has_emergency?: number;     // 1 or 0
-  age_days?: number;
-  
-  // Flexible index signature for other SimPRO fields not explicitly typed
+  // Any extra fields
   [key: string]: any;
 }
 
 /**
 Prediction result for a single job.
-Used for both profitability and duration predictions.
+Used by both profitability and duration endpoints.
  */
 export type Prediction = {
   jobId: number | string | null;
@@ -56,7 +49,7 @@ export type Prediction = {
   // -- Profitability Outputs --
   class?: "Low" | "Medium" | "High";
   confidence?: number;      // 0 to 1
-  probability?: number;    // Legacy confidence field
+  probability?: number;
   
   // -- Duration Outputs --
   predicted_completion_days?: number; // In days
@@ -103,14 +96,15 @@ export interface PredictResponse {
 // --- API Functions ---
 
 export async function syncJobs(params: SyncParams) {
-  const query = {
+  // sync query is passed through directly from dashboard state
+  const syncQuery = {
     DateIssuedFrom: params.from,
     DateIssuedTo: params.to,
-    force: params.force ? "1" : undefined,
+    force: params.force,
     mode: params.mode,
   };
-  
-  const res = await api.get("/data/sync", { params: query });
+
+  const res = await api.get("/data/sync", { params: syncQuery });
   return res.data;
 }
 

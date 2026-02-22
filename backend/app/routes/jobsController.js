@@ -35,7 +35,7 @@ function getSortValue(job, sortField) {
   }
 }
 
-// -- Quick sort for job array
+// Quick sort for job array
 function quickSort(arr, sortField, order) {
   if (arr.length <= 1) {
     return arr;
@@ -199,11 +199,9 @@ export function handleGetJobs(req, res) {
   const totalJobs = jobs.length;
 
   // page values are pulled from query or defaults if missing
-  let candidatePage = parseInt(req.query.page);
-  if (candidatePage < 1 || candidatePage === NaN || candidatePage > 99) {
-    let page = 1;
-  } else {
-    let page = candidatePage;
+  let page = parseInt(req.query.page);
+  if (Number.isNaN(page) || page < 1) {
+    page = 1;
   }
   
   const pageSize = parseInt(req.query.pageSize) || DEFAULT_PAGE_SIZE;

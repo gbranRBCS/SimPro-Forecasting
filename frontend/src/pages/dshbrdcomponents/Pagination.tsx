@@ -1,13 +1,7 @@
 import { ChevronLeft, ChevronRight } from '../../components/icons';
 
-/**
- PAGINATION CONTROL
- ------------------
- A simple pagination bar
- Takes the current state (current page, num of pages)
- and provides callbacks to change the page or the page size.
- */
-
+// defines the shape of the pagination state object
+// used by the parent component to track current position
 export type PaginationState = {
   page: number;
   pageSize: number;
@@ -18,7 +12,6 @@ interface PaginationProps {
   pagination: PaginationState;
   onPageChange: (page: number) => void;
   onPageSizeChange: (pageSize: number) => void;
-  /** Disable controls while data is loading */
   disabled?: boolean;
 }
 
@@ -26,36 +19,41 @@ export function Pagination({
   pagination,
   onPageChange,
   onPageSizeChange,
-  disabled = false,
+  disabled,
 }: PaginationProps) {
+  // destructure for easier access in the template
   const { page, pageSize, totalPages } = pagination;
 
-  // -- Handlers --
-
-  const handlePrevious = () => {
-    // Don't go below page 1
+  // decrements the current page number
+  // checks to ensure we do not go below page 1
+  function handlePrevious() {
     if (page > 1) {
-      onPageChange(page - 1);
+      const previousPage = page - 1;
+      onPageChange(previousPage);
     }
-  };
+  }
 
-  const handleNext = () => {
-    // Don't go past the last page
+  // increments the current page number
+  // checks to ensure total number of pages is not exceeded
+  function handleNext() {
     if (page < totalPages) {
-      onPageChange(page + 1);
+      const nextPage = page + 1;
+      onPageChange(nextPage);
     }
-  };
+  }
 
-  const handlePageSizeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    // Convert string value from select to number
-    const newSize = Number(e.target.value);
+  // updates the number of items shown per page
+  // triggered when the user selects a new value from the dropdown
+  function handlePageSizeChange(event: React.ChangeEvent<HTMLSelectElement>) {
+    // value from event is string, so str -> num
+    const newSize = Number(event.target.value);
     onPageSizeChange(newSize);
-  };
+  }
 
   return (
     <div className="flex items-center justify-between gap-4 px-6 py-4 bg-slate-900 border-t border-slate-800 rounded-b-xl">
       
-      {/* Page Navigation Buttons */}
+      {/* navigation buttons for moving between pages */}
       <div className="flex items-center gap-4 whitespace-nowrap">
         <button
           onClick={handlePrevious}
@@ -68,7 +66,7 @@ export function Pagination({
         </button>
 
         <span className="text-sm text-slate-300 font-medium">
-          Page {page} of {totalPages || 1}
+          Page {page} of {totalPages}
         </span>
 
         <button
@@ -82,7 +80,7 @@ export function Pagination({
         </button>
       </div>
 
-      {/* Page Size Selector */}
+      {/* dropdown to select how many items are shown per page */}
       <div className="flex items-center gap-2 whitespace-nowrap">
         <label htmlFor="pageSize" className="text-sm text-slate-400">
           Per page:

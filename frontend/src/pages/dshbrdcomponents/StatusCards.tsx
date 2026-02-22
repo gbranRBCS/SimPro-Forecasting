@@ -1,40 +1,34 @@
 import { AlertCircle, CheckCircle, Loader2, TrendingUp } from '../../components/icons';
 
-/**
-STATUS CARDS & ALERTS
----------------------
-Small, reusable UI components for displaying status, errors, and progress.
-Includes:
- - StatusAlert: Generic success/error/info banner.
- - SyncProgressCard: Specific loading state for the SimPRO sync.
- - PredictionSummary: A mini-dashboard for profitability metrics (Legacy/Optional).
-*/
+// small reusable ui components used to show status and errors
 
 interface StatusAlertProps {
   message: string;
   type: 'success' | 'error' | 'info';
 }
 
-export function StatusAlert({ message, type }: StatusAlertProps) {
-  const styles = {
-    success: {
-      bg: 'bg-emerald-900/20 border-emerald-800/50',
-      text: 'text-emerald-300',
-      icon: CheckCircle,
-    },
-    error: {
-      bg: 'bg-red-900/20 border-red-800/50',
-      text: 'text-red-300',
-      icon: AlertCircle,
-    },
-    info: {
-      bg: 'bg-blue-900/20 border-blue-800/50',
-      text: 'text-blue-300',
-      icon: CheckCircle,
-    },
-  };
+// defines the visual styles for each alert type
+const ALERT_STYLES = {
+  success: {
+    bg: 'bg-emerald-900/20 border-emerald-800/50',
+    text: 'text-emerald-300',
+    icon: CheckCircle,
+  },
+  error: {
+    bg: 'bg-red-900/20 border-red-800/50',
+    text: 'text-red-300',
+    icon: AlertCircle,
+  },
+  info: {
+    bg: 'bg-blue-900/20 border-blue-800/50',
+    text: 'text-blue-300',
+    icon: CheckCircle,
+  },
+};
 
-  const style = styles[type];
+export function StatusAlert({ message, type }: StatusAlertProps) {
+  // select the correct style configuration based on the type prop
+  const style = ALERT_STYLES[type];
   const Icon = style.icon;
 
   return (
@@ -47,12 +41,8 @@ export function StatusAlert({ message, type }: StatusAlertProps) {
   );
 }
 
-/**
-Shows a loading spinner specifically for the SimPRO sync process.
-
-SimPRO's API defaults to 30 jobs per page and has strict rate limits.
-Syncing thousands of jobs can take minutes, so we need to set expectations.
- */
+// shows a loading spinner specifically for the simpro sync process
+// this is needed because the api has rate limits and can take a while
 export function SyncProgressCard() {
   return (
     <div className="bg-slate-900 border border-slate-800 rounded-xl px-6 py-4">
@@ -71,9 +61,7 @@ export function SyncProgressCard() {
   );
 }
 
-/**
-Helper type for the props of the PredictionSummary component.
- */
+// helper type for the prediction summary component
 export type PredictionSummaryData = {
   highCount: number;
   mediumCount: number;
@@ -86,9 +74,7 @@ interface PredictionSummaryProps {
   summary: PredictionSummaryData;
 }
 
-/**
-Displays a quick textual summary of profitability predictions.
- */
+// displays a quick summary of profitability predictions
 export function PredictionSummary({ summary }: PredictionSummaryProps) {
   const { highCount, mediumCount, lowCount, count, avgConfidence } = summary;
 

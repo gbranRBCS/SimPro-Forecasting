@@ -1,17 +1,18 @@
 export function toJobRowView(j: any) {
-  const profitClass = j.profitability?.class ?? null;
-  const profitScore = j.profitability?.score ?? null;
-  const profitScoreType = j.profitability?.scoreType ?? null;
+  const profitability = j.profitability;
+  const profitClass = profitability?.class;
+  const profitScore = profitability?.score;
+  const profitScoreType = profitability?.scoreType;
 
   return {
     id: j.id,
-    name: j.descriptionText ?? `Job ${j.id ?? ""}`,
-    customer: j.customerName ?? "—",
-    site: j.siteName ?? "—",
-    status: j.status_name ?? j.stage ?? "—",
-    revenue: j.revenue ?? null,
-    issued: j.dateIssued ?? null,
-    due: j.dateDue ?? null,
+    name: j.descriptionText,
+    customer: j.customerName,
+    site: j.siteName,
+    status: j.status_name,
+    revenue: j.revenue,
+    issued: j.dateIssued,
+    due: j.dateDue,
 
     profitClass,
     profitScore,
@@ -20,28 +21,24 @@ export function toJobRowView(j: any) {
   };
 }
 
-// pretty print
-export function formatCurrency(v: number | null | undefined) {
-  if (v == null) return "—";
-  try {
-    return new Intl.NumberFormat('en-AU', { style: "currency", currency: "GBP" }).format(v);
-  } catch (e) {
-    return "—";
-  }
+// currency text is formatted for GBP
+export function formatCurrency(value: number) {
+  const formatter = new Intl.NumberFormat("en-AU", {
+    style: "currency",
+    currency: "GBP",
+  });
+
+  return formatter.format(value);
 }
 
-export function formatDate(s: string | Date | null | undefined) {
-  if (!s) return "—";
-  try {
-    const d = new Date(s as any);
-    return isNaN(d.getTime()) ? "—" : d.toLocaleDateString('en-GB');
-  } catch (e) {
-    return "—";
-  }
+// Date values are shown using UK format dd/mm/yyyy
+export function formatDate(value: string | Date) {
+  const dateValue = new Date(value);
+  return dateValue.toLocaleDateString("en-GB");
 }
 
-// colours/ icons
-export function classBadgeProps(cls: string | null | undefined) {
+// profitability class decides badge tone and label.
+export function classBadgeProps(cls: string) {
   switch (cls) {
     case "High":
       return { tone: "success", label: "High" } as const;
@@ -50,7 +47,7 @@ export function classBadgeProps(cls: string | null | undefined) {
     case "Low":
       return { tone: "destructive", label: "Low" } as const;
     default:
-      return { tone: "default", label: "—" } as const;
+      throw new Error("Unknown class");
   }
 }
 

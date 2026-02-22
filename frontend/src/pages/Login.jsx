@@ -1,50 +1,85 @@
 import { useState } from "react";
-import api from "../lib/api";
+import { useLogin } from "../features/auth/useLogin";
 
 export default function Login() {
-  const [u, setU] = useState(""); const [p, setP] = useState("");
-  const [err, setErr] = useState(null);
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  
+  // hook handles api call and keeps track of loading/errors logic
+  const { login, loading, error } = useLogin();
 
-  async function submit(e) {
-    e.preventDefault();
-    setErr(null);
-    try {
-      const { data } = await api.post("/auth/login", { username: u, password: p });
-      localStorage.setItem("token", data.token);
+  async function handleSubmit(event) {
+    // stop the default form submission which refreshes the page
+    event.preventDefault();
+    
+    // attempt to log in using the hook
+    const success = await login(username, password);
+
+    if (success) {
+      // direct browser to dashboard on success
       window.location.href = "/dashboard";
-    } catch (e2) {
-      setErr(e2?.response?.data?.error || "Login failed");
     }
   }
 
+  // handler for username input changes
+  function handleUsernameChange(event) {
+    setUsername(event.target.value);
+  }
+
+  // handler for password input changes
+  function handlePasswordChange(event) {
+    setPassword(event.target.value);
+  }
+
   return (
-    <form
-      onSubmit={submit}
-      className="min-h-screen bg-slate-950 flex flex-col items-center justify-center px-6"
-    >
-      <div className="w-full max-w-sm space-y-4 bg-slate-900/70 border border-slate-800 rounded-xl shadow-lg p-8">
-        <div className="space-y-1 text-center">
-          <h1 className="text-2xl font-semibold text-slate-100">SimPRO Forecasting</h1>
-          <p className="text-sm text-slate-400">Please sign in to continue to your dashboard:</p>
+    <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center px-6">
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-sm space-y-6 bg-slate-900/70 border border-slate-800 rounded-xl shadow-lg p-8"
+      >
+        <div className="space-y-2 text-center">
+          <h1 className="text-2xl font-semibold text-slate-100">
+            SimPRO Forecasting
+          </h1>
+          <p className="text-sm text-slate-400">
+            Please sign in to continue to your dashboard:
+          </p>
         </div>
-        <input
-          className="w-full rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          placeholder="username"
-          value={u}
-          onChange={e=>setU(e.target.value)}
-        />
-        <input
-          className="w-full rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-          placeholder="password"
-          type="password"
-          value={p}
-          onChange={e=>setP(e.target.value)}
-        />
-        {err && <div className="rounded-lg border border-red-700/40 bg-red-900/20 px-3 py-2 text-sm text-red-300">{err}</div>}
-        <button className="w-full rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2 focus:ring-offset-slate-950">
-          Login
+
+        <div className="space-y-4">
+          <input
+            className="w-full rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
+            placeholder="Username"
+            type="text"
+            value={username}
+            onChange={handleUsernameChange}
+            disabled={loading}
+          />
+          
+          <input
+            className="w-full rounded-lg border border-slate-800 bg-slate-900/80 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-colors"
+            placeholder="Password"
+            type="password"
+            value={password}
+            onChange={handlePasswordChange}
+            disabled={loading}
+          />
+        </div>
+
+        {error && (
+          <div className="rounded-lg border border-red-900/40 bg-red-900/20 px-4 py-3 text-sm text-red-200">
+            {error}
+          </div>
+        )}
+
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white transition hover:bg-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {loading ? "Signing in..." : "Login"}
         </button>
-      </div>
-    </form>
+      </form>
+    </div>
   );
 }
