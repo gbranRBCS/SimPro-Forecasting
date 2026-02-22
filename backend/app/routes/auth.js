@@ -6,35 +6,48 @@ import { db } from "../db/db.js";
 const router = express.Router();
 
 /**
-AUTHENTICATION ROUTES
-Handles user registration and login.
-Uses:
-- bcrypt for secure password hashing.
-- jsonwebtoken (JWT) for session management.
-- SQLite (via better-sqlite3) for user storage.
+auth routes for register and login.
+this file handles password hashing, credential checks, and jwt creation.
  */
 
 // --- Constants ---
-const SALT_ROUNDS = 10;
-const SESSION_DURATION = "2h"; // Tokens expire after 2 hours
+const SESSION_DURATION = "2h"; // token stays valid for 2 hours
 
+
+function getAuthFields(body) {
+  const safeBody = body ?? {};
+
+  // username and password are normalised to avoid accidental spaces
+  const rawUsername = safeBody.username ?? "";
+  const rawPassword = safeBody.password ?? "";
+  const rawRole = safeBody.role ?? "user";
+
+  const username = String(rawUsername).trim();
+  const password = String(rawPassword);
+  const role = String(rawRole).trim() || "user";
+
+  return { username, password, role };
+}
+
+function hasMissingCredentials(username, password) {
+  return username.length === 0 || password.length === 0;
+}
 
 // POST /auth/register
-// Creates a new user account.
+// creates a user acct, stores hashed pw
 router.post("/register", async (req, res) => {
-  const { username, password, role = "user" } = req.body || {};
+  const { username, password, role } = getAuthFields(req.body);
 
-  // 1. Basic Validation
-  if (!username || !password) {
+  // missing credentials are rejected before any db or hash work starts
+  if (hasMissingCredentials(username, password)) {
     return res.status(400).json({ error: "Username and password are required." });
   }
 
   try {
-    // 2. Hash existing password
-    // We never store plain text passwords in the database.
-    const hash = await bcrypt.hash(password, SALT_ROUNDS);
+    // bcrypt creates the password hash that will go into the users table
+    const hash = await bcrypt.hash(password, 10);
 
-    // 3. Insert into DB
+    // prevents the storage of plain passwords in DB
     const stmt = db.prepare(
       "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)"
     );
@@ -44,53 +57,58 @@ router.post("/register", async (req, res) => {
     return res.status(201).json({ ok: true, message: "User registered successfully." });
 
   } catch (err) {
-    // 4. Handle duplicates
+    // handle duplicate usernames
     if (String(err).includes("UNIQUE")) {
       return res.status(409).json({ error: "Username is already taken." });
     }
 
-    // 5. Build generic error
+    // any other db/hash problem is treated as a server-side failure
     console.error("Registration failed:", err);
     return res.status(500).json({ error: "Internal server error during registration." });
   }
 });
 
 // POST /auth/login
-// Verifies credentials and issues a JWT token.
+// checks credentials and returns token + user details
 router.post("/login", async (req, res) => {
-  const { username, password } = req.body || {};
+  const { username, password } = getAuthFields(req.body);
 
-  // 1. Basic input check
-  if (!username || !password) {
+  // invalid input stops here so db access is skipped
+  if (hasMissingCredentials(username, password)) {
     return res.status(400).json({ error: "Username and password are required." });
   }
 
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret) {
+    console.error("Login failed: JWT_SECRET is not set.");
+    return res.status(500).json({ error: "Server configuration error." });
+  }
+
   try {
-    // 2. Lookup user
+    // user row is loaded from sqlite by username
     const row = db.prepare(
       "SELECT id, username, password_hash, role FROM users WHERE username = ?"
     ).get(username);
 
-    // If user not found, we return a generic error.
+    // generic message avoids revealing whether the username exists in db
     if (!row) {
-      return res.status(401).json({ error: "Invalid credentials" }); // (User not found)
+      return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // 3. Verify password
+    // bcrypt compares incoming password with the stored hash
     const passwordsMatch = await bcrypt.compare(password, row.password_hash);
     if (!passwordsMatch) {
-      return res.status(401).json({ error: "Invalid credentials" }); // (Wrong password)
+      return res.status(401).json({ error: "Invalid credentials" });
     }
 
-    // 4. Generate Session Token (JWT)
-    // This token proves identity for subsequent requests.
+    // jwt token proves identity for further requests
     const token = jwt.sign(
       { 
-        sub: row.id,        // Subject (User ID)
+        sub: row.id,
         username: row.username, 
         role: row.role 
       },
-      process.env.JWT_SECRET,
+      jwtSecret,
       { expiresIn: SESSION_DURATION }
     );
 

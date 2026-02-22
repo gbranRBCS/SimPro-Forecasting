@@ -2,7 +2,7 @@ import "dotenv/config";
 import { db } from "./db.js";
 import bcrypt from "bcrypt";
 
-const username = process.env.SEED_USER?.trim();
+const username = process.env.SEED_USER;
 const password = process.env.SEED_PASS;
 
 if (!username || !password) {

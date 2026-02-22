@@ -1,23 +1,21 @@
 /**
- * Job data normalization
- * Transforms raw SimPRO job data into standardized format for database and ML
+ * job data normalisation for database and ml models.
  */
+
 import { toDate, toIsoDate } from "./dateHelpers.js";
 
-// --- Utilities ---
+// utility helpers
 
-/**
- * Strips HTML tags and decodes entities
- */
-export function stripHtml(s = " ") {
-  if (!s) return "";
-  let text = String(s);
+// removes html tags and decodes common tags from text.
+export function stripHtml(testString = " ") {
+  if (!testString) return "";
+  let text = String(testString);
   
-  // 1. Remove HTML tags (replace with space to prevent word concatenation)
+  // html tags are replaced with spaces so words don't merge
   text = text.replace(/<[^>]*>/g, " ");
   
-  // 2. Decode common entities
-  const entities = {
+  // common html tags matched to their readable altermatives
+  const tags = {
     "&nbsp;": " ",
     "&amp;": "&",
     "&lt;": "<",
@@ -29,51 +27,57 @@ export function stripHtml(s = " ") {
   };
   
   text = text.replace(/&[a-z0-9#]+;/gi, (match) => {
-    return entities[match.toLowerCase()] || " "; 
+    const lowerMatch = match.toLowerCase();
+    return tags[lowerMatch] || " "; 
   });
   
-  // 3. Normalize whitespace
-  return text.replace(/\s+/g, " ").trim();
+  // multiple whitespace characters are collapsed into one
+  text = text.replace(/\s+/g, " ");
+  return text.trim();
 }
 
-/**
- * Safely converts value to number, defaulting to `d` if invalid.
- */
-export function num(x, d = 0) {
-  const n = Number(x);
-  return Number.isFinite(n) ? n : d;
+//converts value to number, defaults to 0 or other value if passed
+export function num(test_num, default_num = 0) {
+  const n = Number(test_num);
+  return Number.isFinite(n) ? n : default_num;
 }
 
-/**
- * Calculates days between two dates
- */
+
+// calculates whole day difference between two dates.
 export function daysBetween(a, b) {
-  const da = a ? new Date(a) : null;
-  const db = b ? new Date(b) : null;
-  if (!da || !db || Number.isNaN(+da) || Number.isNaN(+db)) return null;
+  const da = toDate(a);
+  const db = toDate(b);
+
+  if (!da || !db) {
+    return null;
+  }
+
+  const daValid = !Number.isNaN(+da);
+  const dbValid = !Number.isNaN(+db);
+
+  if (!daValid || !dbValid) {
+    return null;
+  }
+
   const ms = db - da;
-  return Math.round(ms / 86400000);
+  const days = ms / (1000 * 60 * 60 * 24);
+  return Math.round(days);
 }
+// financials
+export function calculateFinancials(job) {
+  const incTax = job.Total.IncTax;
+  let revenue = (typeof incTax === "number") ? incTax : Number(incTax) ?? null;
 
-// --- Financial Calculations ---
-
-/**
- * Calculates financial metrics for a job from raw SimPRO data
- */
-export function calculateFinancials(j) {
-  const incTax = j?.Total?.IncTax ?? null;
-  const revenue = typeof incTax === "number" ? incTax : incTax ? Number(incTax) : null;
-
-  const mats = j?.Totals?.MaterialsCost;
-  const resCost = j?.Totals?.ResourcesCost;
-  const labor = resCost?.Labor;
-  const overhead = resCost?.Overhead;
-  const laborHours = resCost?.LaborHours;
-
-  const materials_cost_est = num(mats?.Estimate, num(mats?.Actual, 0));
-  const labor_cost_est = num(labor?.Estimate, num(labor?.Actual, 0));
-  const overhead_est = num(overhead?.Actual, 0);
-  const labor_hours_est = num(laborHours?.Estimate, num(laborHours?.Actual, 0));
+  const mats = job.Totals.MaterialsCost;
+  const resCost = job.Totals.ResourcesCost;
+  const labor = resCost.Labor;
+  const overhead = resCost.Overhead;
+  const laborHours = resCost.LaborHours;
+  
+  const materials_cost_est = num(mats.Estimate, num(mats.Actual, 0));
+  const labor_cost_est = num(labor.Estimate, num(labor.Actual, 0));
+  const overhead_est = num(overhead.Actual, 0);
+  const labor_hours_est = num(laborHours.Estimate, num(laborHours.Actual, 0));
   
   const cost_est_total = materials_cost_est + labor_cost_est + overhead_est;
 
@@ -87,47 +91,48 @@ export function calculateFinancials(j) {
   };
 }
 
-// --- Normalization ---
+// main normalisation
 
-/**
- * Transforms raw SimPRO job data into a standardized format for the frontend and ML models.
- */
-export function normaliseJob(j) {
-  const financials = calculateFinancials(j);
+// transforms raw simpro job into clean format for frontend and ml.
+export function normaliseJob(job) {
+  const financials = calculateFinancials(job);
+  const descriptionText = stripHtml(job.Description);
 
-  const descriptionText = stripHtml(j?.Description ?? " ");
-
-  const dateIssued = j?.DateIssued ?? null;
-  const dateDue = j?.DueDate ?? null;
-  const dateCompleted = j?.DateCompleted ?? j?.CompletedDate ?? null;
+  const dateIssued = toIsoDate(job.DateIssued);
+  const dateDue = toIsoDate(job.DueDate);
+  const dateCompleted = toIsoDate(job.DateCompleted);
   
-  const age_days = dateIssued ? daysBetween(dateIssued, new Date()) : null;
-  const due_in_days = dateIssued && dateDue ? daysBetween(dateIssued, dateDue) : null;
-  const completion_days = dateIssued && dateCompleted ? daysBetween(dateIssued, dateCompleted) : null;
+  let age_days = dateIssued ? daysBetween(dateIssued, new Date()) : null;
+  let due_in_days = (dateIssued && dateDue) ? daysBetween(dateIssued, dateDue) : null;
+  let completion_days = (dateIssued && dateCompleted) ? daysBetween(dateIssued, dateCompleted) : null;
   
   const isCompleted = dateCompleted != null;
-  
-  const isOverdue = dateDue ? (
-    dateCompleted 
-      ? new Date(dateCompleted) > new Date(dateDue)
-      : new Date() > new Date(dateDue)
-  ) : false;
 
-  const txt = descriptionText.toLowerCase();
-  const has_emergency = /emergency|urgent|callout|call-out|call out/.test(txt) ? 1 : 0;
+  let isOverdue = false;
+  if (dateDue) {
+    const dueDate = toDate(dateDue);
+    if (dateCompleted) {
+      const completedDate = toDate(dateCompleted);
+      isOverdue = completedDate > dueDate;
+    } else {
+      const now = new Date();
+      isOverdue = now > dueDate;
+    }
+  }
+
+  const text = descriptionText.toLowerCase();
+  const emergencyPattern = /emergency|urgent|callout|call-out|call out/;
+  const has_emergency = emergencyPattern.test(text) ? 1 : 0;
 
   return {
-    id: j?.ID ?? j?.Id ?? j?.id ?? null,
-    // Text fields
+    id: job.ID,
     descriptionText,
     desc_len: descriptionText.length,
-    customerName: j?.Customer?.CompanyName ?? null,
-    siteName: j?.Site?.Name ?? null,
-    status_name: j?.Status?.Name ?? null,
-    stage: j?.Stage ?? null,
-    jobType: j?.Type ?? null,
-
-    // Dates & Times
+    customerName: job.Customer.CompanyName,
+    siteName: job.Site.Name,
+    status_name: job.Status.Name,
+    stage: job.Stage,
+    jobType: job.Type,
     dateIssued,
     dateDue,
     dateCompleted,
@@ -136,11 +141,7 @@ export function normaliseJob(j) {
     completion_days,
     is_completed: isCompleted,
     is_overdue: isOverdue,
-    
-    // Financials
     ...financials,
-    
-    // Flags
-    has_emergency,
+    has_emergency
   };
 }

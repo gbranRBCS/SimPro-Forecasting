@@ -1,23 +1,81 @@
 /**
- * Jobs controller
- * Handles API routes for jobs listing and ML predictions
+ * jobs controller for listing and ml predictions.
+ * handles filtering, paginating, and external calls to ml
  */
 import axios from "axios";
 import { getCachedJobs } from "./jobsRepo.js";
 import { axiosDiag } from "./simproClient.js";
 import { getSimproToken } from "./simproClient.js";
 
-// --- Filters & Sorting ---
+// helpers for filtering and sorting jobs
 
 function getRevenue(j) {
   return typeof j?.revenue === "number" ? j.revenue : null;
 }
 
-/**
- * Filters and sorts jobs based on query parameters
- */
+function getSortValue(job, sortField) {
+  if (sortField === "revenue") {
+    const revenue = job?.revenue;
+    return typeof revenue === "number" ? revenue : -Infinity;
+  }
+
+  const rawValue = job?.[sortField];
+
+  if (rawValue instanceof Date) {
+    return rawValue.toISOString();
+  }
+
+  switch (typeof rawValue) {
+    case "number":
+      return rawValue;
+    case "string":
+      return rawValue.toLowerCase();
+    default:
+      return "";
+  }
+}
+
+// -- Quick sort for job array
+function quickSort(arr, sortField, order) {
+  if (arr.length <= 1) {
+    return arr;
+  }
+
+  const pivot = arr[arr.length-1]
+  const L = [];
+  const R = [];
+
+  const pivotValue = getSortValue(pivot, sortField);
+
+  for (let i =0; i < arr.length-1; i++){
+    const currentValue = getSortValue(arr[i], sortField);
+
+    if (currentValue < pivotValue){
+      L.push(arr[i]);
+    } else {
+      R.push(arr[i]);
+    }
+  }
+
+  let result = [];
+  if (L.length > 0 && R.length > 0) {
+    result = [...quickSort(L, sortField, order), pivot, ...quickSort(R, sortField, order)];
+  } else if (L.length > 0) {
+    result = [...quickSort(L, sortField, order), pivot];
+  } else { // L !> 0 && R.length > 0
+    result = [pivot, ...quickSort(R, sortField, order)]
+  }
+
+  if (order === "desc") {
+    result.reverse();
+  }
+
+  return result;
+}
+
+// filters and sorts jobs using query params from the request. Utilises quick sort algorithm.
 export function filterAndSortJobs(jobs, query) {
-  let {
+  const {
     sortField = "revenue",
     order = "asc",
     minRevenue,
@@ -26,54 +84,53 @@ export function filterAndSortJobs(jobs, query) {
     page,
     pageSize,
   } = query;
-  
+
   let filtered = [...jobs];
 
-  if (minRevenue) {
+  const revenueList = filtered.map((job) => getRevenue(job));
+  const hasAnyRevenue = revenueList.length > 0;
+
+  if (minRevenue && hasAnyRevenue) {
+    const minValue = parseFloat(minRevenue);
     filtered = filtered.filter((j) => {
       const r = getRevenue(j);
-      return r != null && r >= parseFloat(minRevenue);
-    });
-  }
-  
-  if (maxRevenue) {
-    filtered = filtered.filter((j) => {
-      const r = getRevenue(j);
-      return r != null && r <= parseFloat(maxRevenue);
+      return r != null && r >= minValue;
     });
   }
 
-  filtered.sort((a, b) => {
-    const A = sortField === "revenue" ? (getRevenue(a) ?? -Infinity) : a[sortField];
-    const B = sortField === "revenue" ? (getRevenue(b) ?? -Infinity) : b[sortField];
-    
-    if (order === "desc") return A > B ? -1 : 1;
-    return A > B ? 1 : -1;
-  });
+  if (maxRevenue && hasAnyRevenue) {
+    const maxValue = parseFloat(maxRevenue);
+    filtered = filtered.filter((j) => {
+      const r = getRevenue(j);
+      return r != null && r <= maxValue;
+    });
+  }
+
+  filtered = quickSort(filtered, sortField, order);
 
   if (!page && !pageSize && limit) {
-    const n = Number.parseInt(limit, 10);
-    if (!Number.isNaN(n) && n > 0) filtered = filtered.slice(0, n);
+    const n = Number.parseInt(limit);
+    if (!Number.isNaN(n) && n > 0) {
+      filtered = filtered.slice(0, n);
+    }
   }
   return filtered;
 }
 
-/**
- * Helper to determine which jobs to send to the ML service.
- * Can select by specific IDs, explicit job objects, or a filter query.
- */
+// decides which jobs are sent to ml
 export function selectJobsForPrediction(req, cachedJobs) {
-  const bodyJobs = Array.isArray(req.body?.jobs) ? req.body.jobs : null;
-  const bodyJobIds = Array.isArray(req.body?.jobIds) ? req.body.jobIds : null;
+  const bodyJobs = (req.body?.jobs) instanceof Array ? req.body.jobs : null;
+  const bodyJobIds = (req.body?.jobIds) instanceof Array ? req.body.jobIds : null;
 
-  const limitFromBody = parseInt(req.body?.limit, 10);
-  const limitFromQuery = parseInt(req.query?.limit, 10);
-  
-  const effectiveLimit = Number.isFinite(limitFromBody)
-    ? limitFromBody
-    : Number.isFinite(limitFromQuery)
-    ? limitFromQuery
-    : null;
+  const limitFromBody = parseInt(req.body?.limit);
+  const limitFromQuery = parseInt(req.query?.limit);
+
+  let usedLimit = null;
+  if (Number.isFinite(limitFromBody)) {
+    usedLimit = limitFromBody;
+  } else if (Number.isFinite(limitFromQuery)) {
+    usedLimit = limitFromQuery;
+  }
 
   let jobsToSend = [];
 
@@ -83,7 +140,7 @@ export function selectJobsForPrediction(req, cachedJobs) {
     const idSet = new Set(
       bodyJobIds
         .map((id) => (id == null ? null : String(id)))
-        .filter(Boolean)
+        .filter(Boolean) // removes nulls after mapping
     );
 
     jobsToSend = cachedJobs.filter((job) => {
@@ -91,120 +148,106 @@ export function selectJobsForPrediction(req, cachedJobs) {
       return id != null && idSet.has(String(id));
     });
   } else {
+    // when no explicit list is given, query filters are applied
     jobsToSend = filterAndSortJobs(cachedJobs, req.query);
   }
 
-  if (Number.isFinite(effectiveLimit) && effectiveLimit > 0) {
-    return jobsToSend.slice(0, effectiveLimit);
+  if (Number.isFinite(usedLimit) && usedLimit > 0) {
+    return jobsToSend.slice(0, usedLimit);
   }
   
   return jobsToSend;
 }
 
-/**
- * Generic handler for proxying requests to an ML service.
- */
+// generic handler for requests to an ml service.
 export async function handlePredictionRequest(req, res, serviceUrl, endpointName) {
   const cachedJobs = getCachedJobs();
   const jobsToSend = selectJobsForPrediction(req, cachedJobs);
 
-  if (!jobsToSend?.length) {
+  // empty input just returns an empty prediction list
+  if (!jobsToSend || jobsToSend.length === 0) {
     return res.json({ predictions: [], count: 0, model_loaded: false });
   }
 
+  // missing url means ml service is not available
   if (!serviceUrl) {
     return res.status(500).json({
-      error: `ML service URL for ${endpointName} not configured.`,
+      error: `ML service URL for ${endpointName} not available.`,
     });
   }
 
   try {
-    console.info(
-      `[${endpointName}] forwarding ${jobsToSend.length} jobs to ML service at ${serviceUrl}`
-    );
-    
     const response = await axios.post(serviceUrl, {
       data: jobsToSend,
     });
-    
+
     return res.json(response.data);
   } catch (err) {
-    console.error(
-      `Error forwarding jobs to ML service (${endpointName}):`,
-      axiosDiag(err),
-      "jobsCount:",
-      jobsToSend.length
-    );
-
-    const mlStatus = err.response?.status ?? null;
-    const mlBody = err.response?.data ?? { message: err.message };
+    console.error(`ML request failed (${endpointName}):`, axiosDiag(err));
 
     return res.status(502).json({
       error: `ML Prediction failed (${endpointName})`,
-      mlStatus,
-      mlBody,
+      detail: err.message,
     });
   }
 }
 
-/**
- * GET /jobs - Retrieve cached jobs with filtering/pagination
- */
+// GET /jobs
 export function handleGetJobs(req, res) {
   const cachedJobs = getCachedJobs();
   const jobs = filterAndSortJobs(cachedJobs, req.query);
+  const totalJobs = jobs.length;
 
-  const page = parseInt(req.query.page, 10) || 1;
-  const pageSize = parseInt(req.query.pageSize, 10) || jobs.length || 1;
+  // page values are pulled from query or defaults if missing
+  let candidatePage = parseInt(req.query.page);
+  if (candidatePage < 1 || candidatePage === NaN || candidatePage > 99) {
+    let page = 1;
+  } else {
+    let page = candidatePage;
+  }
   
+  const pageSize = parseInt(req.query.pageSize) || DEFAULT_PAGE_SIZE;
+
   const start = (page - 1) * pageSize;
-  const paged = jobs.slice(start, start + pageSize);
+  const end = start + pageSize;
+  const paged = jobs.slice(start, end);
 
   res.json({
     jobs: paged,
-    total: jobs.length,
+    total: totalJobs,
     page,
-    pageSize,
-    totalPages: Math.ceil(jobs.length / pageSize),
+    pageSize: pageSize,
+    totalPages: Math.ceil(totalJobs / pageSize),
   });
 }
 
-/**
- * POST /predict - Profitability prediction
- */
+// POST /predict
 export async function handleProfitabilityPrediction(req, res) {
-  const url = process.env.ML_PROFITABILITY_URL 
-    ? `${process.env.ML_PROFITABILITY_URL}/predict` 
-    : "http://localhost:8000/predict";
-    
+  let url = "http://localhost:8000/predict";
+  
   return handlePredictionRequest(req, res, url, "predict-profitability");
 }
 
-/**
- * POST /predict_duration - Completion time prediction
- */
+// POST /predict_duration
 export async function handleDurationPrediction(req, res) {
-  const url = process.env.ML_DURATION_URL 
-    ? `${process.env.ML_DURATION_URL}/predict` 
-    : "http://localhost:8001/predict";
-    
+  let url = "http://localhost:8001/predict";
+
   return handlePredictionRequest(req, res, url, "predict-duration");
 }
 
-/**
- * GET /oauth-test - Diagnostic endpoint to check token health
- */
+// GET /oauth-test
 export async function handleOAuthTest(req, res) {
   try {
     const token = await getSimproToken();
+    let tokenPreview = token ? `${token.slice(0, 24)}...` : null;
+
     return res.status(200).json({
       ok: true,
-      tokenPreview: token ? `${token.slice(0, 24)}...` : null,
-      base: process.env.SIMPRO_API_BASE || process.env.SIMPRO_API_URL || null,
+      tokenPreview,
+      base: process.env.SIMPRO_API_BASE,
     });
   } catch (err) {
-    return res
-      .status(500)
-      .json({ ok: false, error: err?.message || "unknown error" });
+    const message = err?.message || "no error message given";
+    return res.status(500).json({ ok: false, error: message });
   }
 }

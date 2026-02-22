@@ -1,57 +1,56 @@
 /**
- * Jobs repository
- * Handles database operations and in-memory cache management
+ * jobs repository for db operations and cache access.
  */
 import { clearJobs, loadJobs, upsertJobs } from "../db/jobs.js";
 import { toIsoDate, toIsoString } from "./dateHelpers.js";
 
-// Re-export database functions for convenience
 export { clearJobs, loadJobs, upsertJobs } from "../db/jobs.js";
 
 /**
- * Gets all cached jobs
+ * returns cached jobs from the database
  */
 export function getCachedJobs() {
   return loadJobs();
 }
 
 /**
- * Reloads the in-memory cache from the database.
- * Used when other processes update the DB directly.
+ * reloads the cache when data is updated outside this file
  */
 export function refreshCachedJobsFromDb() {
   return loadJobs();
 }
 
-// --- Row Building ---
+// job row building helpers
 
 /**
- * Extracts and validates key fields from a normalized job object to prepare it for database storage.
+ * builds a safe db row from a normalised job object.
+ * basic validation is done so impossible dates do not get stored.
  */
 export function buildJobRow(job) {
-  if (!job) return null;
-  
-  const jobId = job?.id;
-  if (jobId == null) return null;
+  if (!job || job?.id == null) {
+    return null;
+  }
 
-  const issuedCandidate = job?.dateIssued ?? null;
-  const completedCandidate = job?.dateCompleted ?? null;
-  
-  const updatedCandidate = completedCandidate ?? issuedCandidate;
+  const jobId = job.id;
+  const issuedCandidate = job?.dateIssued || null;
+  const completedCandidate = job?.dateCompleted || null;
 
-  // Validate issued date is not in the future
+  // use completed date if not null, otherwise use issued
+  let updatedCandidate = completedCandidate ? completedCandidate : issuedCandidate;
+
+  // issued date is checked to avoid future dates getting saved
   let validatedIssuedDate = null;
   if (issuedCandidate) {
     const parsed = new Date(issuedCandidate);
     if (!Number.isNaN(+parsed)) {
       const now = new Date();
       const oneDayAhead = new Date(now.getTime() + 24 * 60 * 60 * 1000);
-      
+
       if (parsed.getTime() <= oneDayAhead.getTime()) {
         validatedIssuedDate = toIsoDate(parsed);
       } else {
         console.warn(
-          `Job ${jobId}: issued date ${issuedCandidate} is in the future. Nullifying to protect data integrity.`
+          `Job ${jobId}: issued date ${issuedCandidate} is in the future. Ignoring to protect dataset.`
         );
       }
     }

@@ -29,10 +29,10 @@ const latestIssuedStmt = db.prepare(`
 
 const clearJobsStmt = db.prepare("DELETE FROM jobs");
 
-export function upsertJobs(rows = []) {
+export function upsertJobs(rows = []) { // updates or inserts jobs into database
   if (!Array.isArray(rows) || rows.length === 0) return 0;
   const tx = db.transaction((items) => {
-    for (const row of items) {
+    for (let row of items) {
       insertJobStmt.run(row);
     }
   });

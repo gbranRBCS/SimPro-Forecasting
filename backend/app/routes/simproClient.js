@@ -1,14 +1,14 @@
 /**
- * SimPRO API client
- * Handles OAuth authentication, rate limiting, pagination, and API requests
+ * simpro API client for fetching job data.
+ * handles oauth tokens, rate limits, retries, and pagination.
  */
 import axios from "axios";
 import { getLatestIssuedDate } from "../db/jobs.js";
 
-// --- Utilities ---
+// utility functions
 
 /**
- * Helper to extract useful error details from an Axios error object
+ * extracts useful error info from axios errors for logging.
  */
 export function axiosDiag(err) {
   return {
@@ -25,30 +25,35 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// retry logic for network failures and rate limits
+
 /**
- * Wraps an async function with retry logic
- * Handles rate limits (429) & network glitches
- * Uses exponential backoff to avoid overwhelming the API
+ * wraps a function with automatic retry logic
+ * handles rate limits and other errors
+ * uses exponential to slow down requests
  */
 export async function withRetries(fn, { maxRetries = 5, baseDelay = 1000 } = {}) {
   let attempt = 0;
   
   while (true) {
     try {
-      return await fn();
+      const result = await fn();
+      return result;
     } catch (err) {
       const status = err?.response?.status;
       const code = err?.code;
       const retryAfterSec = Number(err?.response?.headers?.["retry-after"]);
       
+      // check if this error is worth retrying
       const isRateLimited = status === 429;
       const isServerIssues = status === 502 || status === 503 || status === 504;
       const isNetworkIssues = code === "ECONNRESET" || code === "ETIMEDOUT";
 
-      const shouldRetry = (isRateLimited || isServerIssues || isNetworkIssues) && attempt < maxRetries;
+      const canRetry = attempt < maxRetries;
+      const shouldRetry = (isRateLimited || isServerIssues || isNetworkIssues) && canRetry;
 
       if (shouldRetry) {
-        const jitterMs = parseInt(process.env.SIMPRO_RETRY_JITTER_MS || "250", 10);
+        const jitterMs = parseInt(process.env.SIMPRO_RETRY_JITTER_MS);
         
         let waitTimeMs = 0;
         if (Number.isFinite(retryAfterSec)) {
@@ -60,7 +65,7 @@ export async function withRetries(fn, { maxRetries = 5, baseDelay = 1000 } = {})
         }
 
         console.warn(
-          `simPRO retry: status=${status ?? code}, waiting ${waitTimeMs}ms (attempt ${attempt + 1}/${maxRetries})`
+          `simPRO retry: status=${status || code}, waiting ${waitTimeMs}ms (attempt ${attempt + 1}/${maxRetries})`
         );
         
         await sleep(waitTimeMs);
@@ -74,24 +79,19 @@ export async function withRetries(fn, { maxRetries = 5, baseDelay = 1000 } = {})
   }
 }
 
-// --- Rate Limiting & Throttling ---
+// rate limiting to avoid hitting simpro api limits
 
-const requestGapMs = Math.max(
-  0,
-  parseInt(process.env.SIMPRO_REQUEST_INTERVAL_MS || "500", 10) || 0
-);
+const requestGapMs = parseInt(process.env.SIMPRO_REQUEST_INTERVAL_MS)
 
-const throttlePenaltyMs = Math.max(
-  requestGapMs,
-  parseInt(process.env.SIMPRO_THROTTLE_PENALTY_MS || `${requestGapMs * 4}`, 10) || requestGapMs
-);
+// penalty delay when rate limited
+const throttlePenaltyMs = parseInt(process.env.SIMPRO_THROTTLE_PENALTY_MS);
 
 let simproQueue = Promise.resolve();
 let nextAllowedRequestAt = 0;
 
 /**
- * Schedules a request to SimPRO, ensuring we don't exceed rate limits.
- * All requests through this function are sequential.
+ * schedules a request to simpro with rate limiting
+ * all requests go through a single queue so they are sequential
  */
 export function scheduleSimproRequest(makeRequest, label = "simpro") {
   const run = simproQueue.then(async () => {
@@ -124,23 +124,22 @@ export function scheduleSimproRequest(makeRequest, label = "simpro") {
   return run;
 }
 
-// --- OAuth Token Management ---
+// oauth token management
 
 let cachedToken = null;
 let tokenExpiryMs = 0;
 
-/**
- * Retrieves an OAuth 2.0 access token for SimPRO.
- * Uses client credentials flow. Returns cached token if still valid.
- */
+// gets an oauth token for simpro API access.
 export async function getSimproToken() {
   const now = Date.now();
-  if (cachedToken && now < tokenExpiryMs - 60_000) return cachedToken;
+  const tokenStillValid = cachedToken && now < tokenExpiryMs - 60_000;
+  
+  if (tokenStillValid) {
+    return cachedToken;
+  }
 
   const form = new URLSearchParams();
-  form.append("grant_type", process.env.GRANT_TYPE || "client_credentials");
-  if (process.env.SCOPE) form.append("scope", process.env.SCOPE);
-  if (process.env.AUDIENCE) form.append("audience", process.env.AUDIENCE);
+  form.append("grant_type", process.env.GRANT_TYPE);
 
   try {
     const resp = await withRetries(
@@ -156,11 +155,16 @@ export async function getSimproToken() {
       { maxRetries: 4, baseDelay: 1500 }
     );
 
-    const { access_token, expires_in } = resp.data || {};
-    if (!access_token) throw new Error("No access_token in token response");
+    const data = resp.data;
+    const access_token = data.access_token;
+    const expires_in = data.expires_in;
+    
+    if (!access_token) {
+      throw new Error("No access_token in token response");
+    }
     
     cachedToken = access_token;
-    tokenExpiryMs = now + (expires_in || 3600) * 1000;
+    tokenExpiryMs = now + expires_in * 1000;
     
     return cachedToken;
   } catch (err) {
@@ -170,16 +174,19 @@ export async function getSimproToken() {
   }
 }
 
-// --- URL Builders ---
+// url builders
 
 function buildJobsUrl() {
-  const base = process.env.SIMPRO_API_BASE || process.env.SIMPRO_API_URL;
-  if (!base) throw new Error("SIMPRO_API_BASE is not configured");
+  const base = process.env.SIMPRO_API_BASE;
+  if (!base) {
+    throw new Error("SIMPRO_API_BASE is not configured");
+  }
   
-  const companyId = process.env.SIMPRO_COMPANY_ID || "0";
-  let jobsPath = (
-    process.env.SIMPRO_JOBS_PATH || "/api/v1.0/companies/{COMPANY_ID}/jobs/"
-  ).replace("{COMPANY_ID}", companyId);
+  const companyId = process.env.SIMPRO_COMPANY_ID;
+  let jobsPath = process.env.SIMPRO_JOBS_PATH;
+  
+  // replace company id placeholder
+  jobsPath = jobsPath.replace("{COMPANY_ID}", companyId);
 
   if (!jobsPath.startsWith("/")) jobsPath = `/${jobsPath}`;
   if (!jobsPath.endsWith("/")) jobsPath += "/";
@@ -187,20 +194,17 @@ function buildJobsUrl() {
   return new URL(jobsPath, base).toString();
 }
 
-// --- Public API ---
+// main api functions
 
-/**
- * Fetches specific jobs or a list of jobs from SimPRO.
- * Handles pagination automatically.
- */
+// fetches jobs from simpro with automatic pagination
 export async function fetchSimPROJobs(params = {}, { historical = false, maxJobs = null } = {}) {
   const url = buildJobsUrl();
   const token = await getSimproToken();
 
-  const pageSizeEnv = parseInt(process.env.SIMPRO_PAGE_SIZE || "250");
-  const pageSize = Math.min(Number.isFinite(pageSizeEnv) ? pageSizeEnv : 250, 250);
-  const pageDelayMs = parseInt(process.env.SIMPRO_PAGE_DELAY_MS || "0") || 0;
-  const pageJitterMs = parseInt(process.env.SIMPRO_PAGE_JITTER_MS || "0") || 0;
+  const pageSizeEnv = parseInt(process.env.SIMPRO_PAGE_SIZE);
+  const pageSize = Math.min(pageSizeEnv, 250);
+  const pageDelayMs = parseInt(process.env.SIMPRO_PAGE_DELAY_MS);
+  const pageJitterMs = parseInt(process.env.SIMPRO_PAGE_JITTER_MS);
   
   const maxSyncDefaultRaw = 1000;
   const maxSyncDefault =
@@ -236,7 +240,14 @@ export async function fetchSimPROJobs(params = {}, { historical = false, maxJobs
       { maxRetries: 5, baseDelay: 1000 }
     );
 
-    const jobs = Array.isArray(resp.data) ? resp.data : resp.data?.jobs || [];
+    // response can be array or object with jobs property
+    let jobs = [];
+    if (Array.isArray(resp.data)) {
+      jobs = resp.data;
+    } else if (resp.data?.jobs) {
+      jobs = resp.data.jobs;
+    }
+    
     if (!jobs.length) {
       break;
     }
@@ -248,6 +259,7 @@ export async function fetchSimPROJobs(params = {}, { historical = false, maxJobs
       break;
     }
 
+    // check if last page
     if (jobs.length < pageSize) {
       break;
     }
@@ -263,14 +275,14 @@ export async function fetchSimPROJobs(params = {}, { historical = false, maxJobs
   return allJobs;
 }
 
-/**
- * Fetches detailed information for a single job from SimPRO
- */
+// fetches detailed info for a single job by id.
 export async function fetchJobDetail(jobId) {
-  const base = process.env.SIMPRO_API_BASE || process.env.SIMPRO_API_URL;
-  if (!base) throw new Error("SIMPRO_API_BASE is not configured");
+  const base = process.env.SIMPRO_API_BASE;
+  if (!base) {
+    throw new Error("SIMPRO_API_BASE is not configured in .env");
+  }
   
-  const companyId = process.env.SIMPRO_COMPANY_ID || "0";
+  const companyId = process.env.SIMPRO_COMPANY_ID;
   const url = new URL(
     `/api/v1.0/companies/${companyId}/jobs/${jobId}`,
     base

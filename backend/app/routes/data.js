@@ -1,12 +1,6 @@
 /**
- * Main router module for data synchronization and job APIs
-Uses:
-- simproClient.js: OAuth, API pagination, rate limiting
-- dateHelpers.js: Date parsing and calculations
-- normaliseJob.js: Job data transformation
-- jobsRepo.js: Database operations and cache management
-- syncService.js: Sync orchestration and batch processing
-- jobsController.js: Route handlers and filtering
+ * router for sync and job-related api endpoints.
+ * links auth checks with controllers and sync service calls.
  */
 
 import express from "express";
@@ -22,99 +16,92 @@ import {
 
 const router = express.Router();
 
-// Flag to prevent overlapping sync operations.
+// prevents two sync runs from happening at the same time
 let syncing = false;
 
 /**
- * Middleware: Protect routes with JWT authentication.
+ * middleware that checks for a valid bearer token.
  */
 function authRequired(req, res, next) {
-  const authHeader = req.headers["authorization"];
-  const token = authHeader && authHeader.split(" ")[1];
-  
-  if (!token) return res.sendStatus(401);
+  const authHeader = req.headers["authorization"] ?? "";
+  const headerParts = authHeader.split(" ");
+  const bearerToken = headerParts[0] === "Bearer" ? headerParts[1] : null;
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
-    if (err) return res.sendStatus(403);
+  if (!bearerToken) {
+    return res.sendStatus(401);
+  }
+
+  const jwtSecret = process.env.JWT_SECRET;
+  if (!jwtSecret) {
+    console.error("Auth failed: JWT_SECRET is not set.");
+    return res.sendStatus(500);
+  }
+
+  jwt.verify(bearerToken, jwtSecret, (err, user) => {
+    if (err) {
+      return res.sendStatus(403);
+    }
+
     req.user = user;
     next();
   });
 }
 
 /**
- * GET /sync - Synchronize jobs from SimPRO
- *
- * Supports two modes:
- * - Full sync (mode=full): Refetches all jobs from history start
- * - Incremental sync (default): Fetches only recently changed jobs
- *
- * Query parameters:
- * - mode: "full" or "update" (default)
- * - DateIssuedFrom: Start date for custom range (ISO 8601 or YYYY-MM-DD)
- * - DateIssuedTo: End date for custom range
- * - DateIssued: Specific date filter
+ * GET /sync
+ * runs a full or incremental sync from simPRO into local storage.
+ * query params can still override date windows when needed.
  */
 router.get("/sync", authRequired, async (req, res) => {
+  // when a sync is already running, this request is blocked early
   if (syncing) {
-    return res.status(409).json({ message: "Sync already in progress" });
+    return res.status(409).json({ message: "Sync already running" });
   }
 
   syncing = true;
   try {
+    // request query is translated into the sync service inputs
     const { params, syncMode, historicalRange, incrementalFrom } = getSyncParams(req);
     const result = await executeSyncOperation(params, syncMode, historicalRange, incrementalFrom);
     
+    // response includes latest cached jobs so the ui can refresh immediately
     const cachedJobs = getCachedJobs();
-    res.json({
+    return res.json({
       ...result,
       jobs: cachedJobs,
     });
   } catch (err) {
     console.error("Sync failed:", err.message);
-    res.status(502).json({
+    return res.status(502).json({
       error: "Failed to fetch simPRO data",
       detail: err.message,
     });
   } finally {
-    syncing = false;
+    syncing = false; // ensures syncing can be re-run, regardless of result
   }
 });
 
 /**
- * GET /jobs - Retrieve cached jobs with filtering and pagination
- *
- * Query parameters:
- * - minRevenue: Filter jobs with revenue >= this value
- * - maxRevenue: Filter jobs with revenue <= this value
- * - sortField: Field to sort by (default: "revenue")
- * - order: "asc" or "desc" (default: "asc")
- * - page: Page number for pagination (1-indexed)
- * - pageSize: Items per page
- * - limit: Alternative to pagination (returns first N items)
+ * GET /jobs
+ * returns cached jobs with filtering, sorting, and pagination from controller logic.
  */
 router.get("/jobs", authRequired, handleGetJobs);
 
 /**
- * POST /predict - Profitability prediction via ML service
- *
- * Request body can include:
- * - jobs: Array of full job objects to predict on
- * - jobIds: Array of job IDs to look up in cache
- * - limit: Max number of jobs to send
- *
- * Falls back to query-based filtering if no body provided.
+ * POST /predict
+ * sends jobs to the profitability model and returns predictions.
  */
 router.post("/predict", authRequired, handleProfitabilityPrediction);
 
 /**
- * POST /predict_duration - Completion time prediction via ML service
- *
- * Same body/query format as /predict
+ * POST /predict_duration
+ * sends jobs to the duration model using the same request shape as /predict.
  */
 router.post("/predict_duration", authRequired, handleDurationPrediction);
 
 /**
- * GET /oauth-test - Diagnostic endpoint to verify SimPRO OAuth token health
+ * GET /oauth-test
+ * quick endpoint for checking simPRO oauth token health.
  */
 router.get("/oauth-test", handleOAuthTest);
 
