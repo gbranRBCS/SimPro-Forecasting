@@ -19,9 +19,7 @@ const router = express.Router();
 // prevents two sync runs from happening at the same time
 let syncing = false;
 
-/**
- * middleware that checks for a valid bearer token.
- */
+// middleware that checks for a valid bearer token.
 function authRequired(req, res, next) {
   const authHeader = req.headers["authorization"] ?? "";
   const headerParts = authHeader.split(" ");
