@@ -41,7 +41,7 @@ export function JobsTable({
 
   const [searchTerm, setSearchTerm] = useState('');
 
-  // -- Derived Data --
+  // Derived Data:
 
   // filter and sort the jobs based on user input
   const processedJobs = useMemo(() => {
